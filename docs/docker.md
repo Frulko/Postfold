@@ -112,8 +112,8 @@ If startup fails, inspect `docker compose logs --tail 100 api web`. To roll back
 To publish a release after the main build passes, update `package.json` if its version changed, commit, then:
 
 ```sh
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 Use a new semantic version for each release. Automatic rollout to a particular server is not configured; updates use the Compose steps above.

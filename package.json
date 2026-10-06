@@ -1,7 +1,7 @@
 {
   "name": "postfold",
   "description": "Open-source, self-hosted shared inbox with native IMAP/SMTP, Keycloak SSO, project folders, contact context and duplicate-reply protection.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "license": "AGPL-3.0-only",

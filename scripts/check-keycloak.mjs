@@ -158,8 +158,11 @@ try {
   const activity = await (await fetch(origin + '/demo/conversations/activity', { method: 'POST', headers: { ...headers, Origin: publicOrigin, 'Content-Type': 'application/json' }, body: JSON.stringify([selectedId]) })).json()
   const assigned = activity.find((entry) => entry.data.after?.assigneeId === colleague.id)
   assert.equal(assigned.actor.id, viewer.id, 'Assignment author comes from the verified session, independently of the assignee')
+  // Either request can win the race; the UI check needs a real Charlie → Alice transition.
+  shared = await (await fetch(origin + '/demo/mailbox', { headers })).json()
+  assert.equal((await assign({ targets: [target()], assigneeId: colleague.id })).status, 200)
   await browser(sessions[0], 'find', 'role', 'button', 'click', '--name', 'Refresh', '--exact')
-  await browser(sessions[0], 'wait', '--text', 'Alice Support')
+  await browser(sessions[0], 'wait', '--fn', 'document.querySelector(\'summary[aria-label="Assignment"]\').textContent.includes("Charlie Support")')
   assert.ok((await browser(sessions[0], 'snapshot', '-i')).includes('Sign out'))
   await browser(sessions[0], 'click', 'summary[aria-label="Assignment"]')
   await browser(sessions[0], 'snapshot', '-i')
