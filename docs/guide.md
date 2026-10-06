@@ -2,9 +2,9 @@
 
 **An open-source shared support inbox, organized around your projects.**
 
-Postfold brings project folders, conversation tracking and contact context into a familiar email interface. It is built with TanStack Start, React, a separate NestJS API and PostgreSQL, with an IMAP-compatible architecture as the intended direction.
+Postfold brings project folders, conversation tracking and contact context into a familiar email interface. It is built with TanStack Start, React, a separate NestJS API and PostgreSQL, with optional native IMAP/SMTP connectivity.
 
-**Status: early development, local demo only.** Messages and contacts are fictional. No mailbox is connected, sending is disabled, and the demo has no authentication. Switch between French and English using the header selector. The locale is stored in the URL (`?lang=fr` or `?lang=en`) and applies during server rendering. Messages, custom folder names and labels are never translated. The fictional requests cover VPN access, MFA reset, onboarding and backup recovery.
+**Status: early development, with an optional live IMAP/SMTP mode.** The default demo has fictional messages/contacts, disabled sending and no authentication. [Configure a real mailbox](mailbox-setup.md) to enable encrypted credentials, authenticated access, IMAP synchronization and SMTP text replies. Switch between French and English using the header selector. The locale is stored in the URL (`?lang=fr` or `?lang=en`) and applies during server rendering. Messages, custom folder names and labels are never translated. The fictional requests cover VPN access, MFA reset, onboarding and backup recovery.
 
 ![Postfold inbox with project folders, conversation filters, message reader and contact context](screenshots/inbox-overview.png)
 
@@ -15,11 +15,11 @@ Postfold brings project folders, conversation tracking and contact context into 
 | Project folders | `ID - Project name` at the root; named subfolders, creation, editing, deletion of empty folders without children, preset/custom colors, descendant counts, search, manual ordering and six sort modes. Folder settings are shared in PostgreSQL. |
 | Conversation tracking | Read on opening; manual read/unread; independent Open, Waiting and Closed states; individual and atomic batch updates. States are shared in PostgreSQL. |
 | Display modes | All messages with direct reply controls, or threads with counts and expandable messages. Grouping uses explicit thread IDs; display preference stays browser-local. |
-| Selection and filing | Checkboxes, range selection, select all, first-gesture drag-and-drop, a drag preview with a count badge, highlighted drop targets and a searchable destination picker. Filing is shared in PostgreSQL with revision checks. |
+| Selection and filing | Checkboxes, range selection, select all, first-gesture drag-and-drop, a drag preview with a count badge, highlighted drop targets and a searchable destination picker. Filing uses revision checks and moves native IMAP messages in live mode. |
 | Labels | Shared creation, renaming, colors, ordering, deletion, search, filtering and single/batch assignment. Deleting a label removes it from every conversation in one transaction. |
 | Contacts | Contact details, associated projects, conversation history and browser-local notes. |
 | Drafts | Save and Send controls together; local draft persistence and save on conversation change. Send stays disabled until a mailbox is connected. |
-| Refresh | Manual refresh and automatic refresh every 30 seconds while visible and online. These refresh demo API data, not IMAP mail. |
+| Refresh | Manual refresh and automatic refresh every 30 seconds while visible and online. Live mode synchronizes IMAP; demo mode refreshes fictional API data. |
 | Interface | Responsive layout, keyboard controls and a compact folder tree, French/English controls and a header with simulated team presence. No real presence synchronization yet. |
 
 ### Batch actions without moving the list
@@ -79,6 +79,12 @@ Save a draft while keeping the Send control visible. The disabled Send button an
 
 ![Draft composer with Save draft and disabled Send buttons beside contact notes](screenshots/draft-composer.png)
 
+### Connected mailbox
+
+Live mode imports native IMAP folders and messages and enables SMTP replies. Credentials are encrypted in PostgreSQL, with the encryption key kept separately on the server. This capture uses a real TLS-enabled test mail server with fictional IT support requests; see [mailbox setup](mailbox-setup.md) to connect your provider.
+
+![Connected IMAP mailbox with native folders, IT support messages and an enabled SMTP reply composer](screenshots/live-mailbox.png)
+
 ### Mobile inbox
 
 Folder and label sections start collapsed on mobile. Expand them to use the compact, vertically scrollable tree. The conversation list, reader and contact panel stack vertically. Batch actions remain available without changing the position of the conversation rows.
@@ -87,7 +93,7 @@ Folder and label sections start collapsed on mobile. Expand them to use the comp
 
 </details>
 
-All screenshots come from the running application with fictional demo data. Presence avatars are simulated. See [docs/screenshots/README.md](screenshots/README.md) for capture details.
+All screenshots come from the running application with fictional data. The connected-mailbox capture uses real IMAP/SMTP protocols against an isolated test server; other captures show demo mode with simulated presence. See [docs/screenshots/README.md](screenshots/README.md) for capture details.
 
 ## Quick start
 
@@ -152,7 +158,7 @@ Changing the search, conversation filter or project clears selection. A failed l
 | Message/thread display mode | Browser localStorage | Personal preference. |
 | Presence avatars and activity labels | UI fixtures | Simulated. |
 
-Local persistence is not an offline PWA. IMAP folder creation, message moves and the `\Seen` flag are not synchronized with a real server yet. Existing localStorage keys and demo database/volume names are retained across the project rename so notes, drafts and shared demo settings are preserved. Old browser-local `placements` entries are ignored: PostgreSQL filing is now authoritative. Existing databases keep their saved settings when the fixtures change; new databases receive the IT demo folder tree and labels.
+Local persistence is not an offline PWA. In live mode, IMAP is authoritative for folders, native moves and the `\Seen` flag; PostgreSQL caches messages and stores collaborative metadata, encrypted accounts and durable send attempts. Browser storage is scoped by mailbox email. Existing demo localStorage keys and database/volume names are retained across the project rename. Old browser-local `placements` entries are ignored: the API provides filing state. Existing demo databases keep their settings; new demo databases receive the IT support fixtures. See [live-mode boundaries](mailbox-setup.md#current-boundaries-and-recovery) for protocol and recovery limits.
 
 ## Architecture
 
@@ -162,22 +168,22 @@ Local persistence is not an offline PWA. IMAP folder creation, message moves and
 | `api/` — NestJS | Demo endpoints, input validation, PostgreSQL writes and concurrency rules. |
 | `shared/` | Shared contracts, validators, folder ordering and revision-aware state merging. |
 | PostgreSQL | Authoritative shared folder settings and conversation tracking states. |
-| IMAP/SMTP worker — planned | Durable mailbox synchronization and outbound email delivery. |
+| `api/mail-store.ts` | IMAP polling, UID/UIDVALIDITY reconciliation, native folder/read/move operations, SMTP replies and durable send reservations. |
 
 The intended boundary keeps messages and project folders in IMAP, with collaborative metadata stored separately. Native mail clients should remain usable. Application send reservations cannot prevent someone sending directly from a native client; reconciliation must account for that.
 
 ### Next milestones
 
-- Connect IMAP/SMTP and synchronize folders, message moves and read flags.
-- Add SSO sessions, mailbox authorization and API guards before enabling real accounts.
-- Encrypt SMTP/IMAP passwords and OAuth refresh tokens with keys outside the database; require certificate-validated TLS. See the [credential security requirements](self-hosting.md#smtpimap-credential-security--implementation-requirement).
-- Add WebSocket presence, conversation reservations, a shared action history and server-validated send coordination.
+- Extend IMAP synchronization with incremental MODSEQ, attachment handling and robust reconciliation of ambiguous native changes.
+- Replace the shared live-mode access gate with SSO sessions and per-user mailbox roles; API guards already protect live endpoints.
+- Add provider OAuth and key rotation; password-based IMAP/SMTP already uses authenticated encryption with keys outside PostgreSQL and certificate-validated TLS.
+- Add WebSocket presence, editing reservations and a shared action history; extend the durable send coordination with operator recovery and follow-up replies.
 - Move notes, drafts and contact management into shared storage with conflict handling.
 - Add an offline PWA and evaluate TanStack DB and CRDTs for the parts that need concurrent editing.
 - Add a plugin boundary and external API integrations, including meeting creation.
-- Reconcile IMAP Message-ID, In-Reply-To and References into stable thread identities.
+- Improve thread reconciliation for incomplete or duplicate Message-ID/References headers.
 
-These milestones are planned, not implemented. A reservation and an atomic send decision are required to reduce duplicate replies; presence indicators alone are insufficient. An uncertain SMTP result must not trigger an automatic blind resend.
+These milestones remain planned. Live mode already records durable send attempts and blocks duplicate or uncertain retries; presence indicators alone would be insufficient. An uncertain SMTP result never triggers an automatic blind resend.
 
 ## Development checks
 
@@ -207,7 +213,7 @@ DEMO_MODE=true pnpm start:api
 NITRO_HOST=127.0.0.1 NITRO_PORT=3002 pnpm start
 ```
 
-For a server deployment, environment files, authenticated HTTPS, services, backups and updates, follow the [self-hosting guide](self-hosting.md). It covers the current demo; real mailbox connections remain planned.
+For environment files, HTTPS, services, backups and updates, follow [self-hosting](self-hosting.md). For a real account, also follow [mailbox setup](mailbox-setup.md).
 
 ## Contributing and license
 

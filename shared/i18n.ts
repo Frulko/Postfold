@@ -1,6 +1,20 @@
 export type Locale = 'fr' | 'en'
 
 const english: Record<string, string> = {
+  "Boîte partagée": "Shared mailbox",
+  "Supprimez les dossiers IMAP depuis votre client mail après vérification.": "Review and delete IMAP folders in your native mail client.",
+  "Boîte IMAP": "IMAP mailbox",
+  "Relève de la boîte mail": "Mailbox synchronization",
+  "Relever les nouveaux mails IMAP": "Fetch new IMAP messages",
+  "Boîte IMAP connectée · réponses SMTP protégées contre les doublons. Notes et brouillons restent dans ce navigateur.": "IMAP mailbox connected · SMTP replies protected against duplicate sends. Notes and drafts stay in this browser.",
+  "La dernière relève a échoué ; les mails en cache sont conservés.": "The last sync failed; cached messages were preserved.",
+  "Réponse acceptée par le serveur SMTP.": "Reply accepted by the SMTP server.",
+  "Réponse acceptée par SMTP ; copie dans Envoyés non confirmée. Ne renvoyez pas le mail.": "Reply accepted by SMTP; Sent copy could not be confirmed. Do not resend.",
+  "Envoi non confirmé. Le brouillon est conservé ; vérifiez Envoyés avant de réessayer.": "Delivery could not be confirmed. Your draft was preserved; check Sent before retrying.",
+  "Une réponse a déjà été envoyée à ce mail.": "A reply has already been sent to this message.",
+  "Envoi en cours ou incertain : vérifiez Envoyés, ne renvoyez pas.": "Delivery is pending or uncertain: check Sent, do not resend.",
+  "Le brouillon sera sauvegardé avant l’envoi.": "Your draft will be saved before sending.",
+  "Envoi…": "Sending…",
   "Afficher les dossiers": "Show folders",
   "Afficher les labels": "Show labels",
   "Affichage": "View",
@@ -136,6 +150,7 @@ const english: Record<string, string> = {
   "Non lus": "Unread",
   "Note enregistrée dans ce navigateur.": "Note saved in this browser.",
   "Notes internes": "Internal notes",
+  "Note locale": "Local note",
   "Personnalisée": "Custom",
   "Position": "Position",
   "Position dans l’ordre manuel": "Position in manual order",
@@ -239,7 +254,36 @@ const english: Record<string, string> = {
 
 export const parseLocale = (value: unknown): Locale => value === 'en' ? 'en' : 'fr'
 
+const french: Record<string, string> = {
+  'Mailbox operation in progress; refresh before retrying.': 'Une opération est en cours sur la boîte ; relevez avant de réessayer.',
+  'Mail server operation could not be confirmed. Refresh before retrying; no automatic resend was attempted.': 'L’opération sur le serveur mail n’a pas pu être confirmée. Relevez avant de réessayer ; aucun renvoi automatique n’a été tenté.',
+  'Conversation changed; refresh before retrying.': 'Un échange a changé ; relevez avant de réessayer.',
+  'Folder settings changed; refresh before retrying.': 'Les dossiers ont changé ; relevez avant de réessayer.',
+  'Message changed; refresh before sending.': 'Le mail a changé ; relevez avant d’envoyer.',
+  'A newer message is available in this thread; reply to it instead.': 'Un mail plus récent est disponible dans ce fil ; répondez à celui-ci.',
+  'A reply to this message already exists or is uncertain. Refresh the conversation before sending.': 'Une réponse à ce mail existe déjà ou reste incertaine. Relevez le fil avant d’envoyer.',
+  'A reply from another mail client is already synchronized. Refresh the conversation before sending.': 'Une réponse envoyée depuis un autre client mail est déjà synchronisée. Relevez le fil avant d’envoyer.',
+  'Delivery could not be confirmed. Do not resend; inspect Sent and the mail server. Your draft is preserved.': 'L’envoi n’a pas pu être confirmé. Ne renvoyez pas ; vérifiez Envoyés et le serveur mail. Votre brouillon est conservé.',
+  'Delivery is pending or uncertain; inspect Sent before retrying. Automatic resend is blocked.': 'L’envoi est en cours ou incertain ; vérifiez Envoyés. Le renvoi automatique est bloqué.',
+  'Select a received message with a valid reply address.': 'Sélectionnez un mail reçu avec une adresse de réponse valide.',
+  'Request ID already used for a different reply.': 'Cette tentative est déjà associée à une autre réponse ; vérifiez Envoyés.',
+  'INBOX cannot be renamed, moved or deleted.': 'La boîte de réception ne peut pas être renommée, déplacée ou supprimée.',
+  'The configured Sent folder cannot be renamed or deleted.': 'Le dossier Envoyés configuré ne peut pas être renommé ou supprimé.',
+  'Only empty folders without children can be deleted.': 'Seuls les dossiers vides et sans enfants peuvent être supprimés.',
+  'Live folder deletion is disabled; review and delete it in a native mail client.': 'La suppression des dossiers IMAP est désactivée ; vérifiez leur contenu puis supprimez-les dans votre client mail.',
+  'Folder names cannot contain the IMAP hierarchy delimiter.': 'Le nom ne doit pas contenir le séparateur de dossiers du serveur IMAP.',
+  'Safe filing requires the IMAP MOVE and UIDPLUS extensions.': 'Le déplacement sécurisé nécessite les extensions IMAP MOVE et UIDPLUS.',
+  'A sent copy is still pending synchronization; refresh before filing it.': 'La copie envoyée attend sa synchronisation ; relevez avant de la déplacer.',
+  'Mailbox identity changed; refresh before retrying.': 'L’identité du dossier a changé ; relevez avant de réessayer.',
+  'Messages moved in another client; refresh before retrying.': 'Les mails ont été déplacés depuis un autre client ; relevez avant de réessayer.',
+  'Unknown destination folder.': 'Le dossier de destination est inconnu.',
+  'Folder paths must be unique.': 'Les chemins des dossiers doivent être uniques.',
+  'Destination folder is not synchronized.': 'Le dossier de destination n’est pas encore synchronisé.',
+  'Unknown label.': 'Un label n’existe plus.',
+  'Message no longer exists.': 'Ce mail n’existe plus.',
+}
+
 export function translate(locale: Locale, key: string, ...values: (string | number)[]) {
-  const message = locale === 'en' ? english[key] ?? key : key
+  const message = locale === 'en' ? english[key] ?? key : french[key] ?? key
   return message.replace(/\{(\d+)\}/g, (match, index) => String(values[Number(index)] ?? match))
 }

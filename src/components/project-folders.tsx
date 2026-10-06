@@ -7,9 +7,10 @@ import { Icon } from './icon'
 const colorNames = { green: 'Vert', orange: 'Orange', blue: 'Bleu', purple: 'Violet', rose: 'Rose', slate: 'Gris' }
 export type FolderFailure = { message: string; revision: number }
 
-export function ProjectFolders({ mailbox, revision, currentId, sort, order, disabled, dropTarget, movingMail, onSelect, onSave, onSort, onReorder, onDelete, onMailOver, onMailLeave, onMailDrop }: {
+export function ProjectFolders({ mailbox, revision, currentId, sort, order, disabled, allowDelete = true, dropTarget, movingMail, onSelect, onSave, onSort, onReorder, onDelete, onMailOver, onMailLeave, onMailDrop }: {
   mailbox: Mailbox; currentId: string | null; sort: ProjectSort; order: string[]; disabled: boolean
   revision: number
+  allowDelete?: boolean
   dropTarget: string | null; movingMail: boolean
   onSelect: (id: string) => void
   onSave: (input: ProjectInput, editingId: string | null, position: number | null, revision: number) => Promise<FolderFailure | null>
@@ -116,7 +117,7 @@ export function ProjectFolders({ mailbox, revision, currentId, sort, order, disa
           {hasChildren ? <button className="folder-collapse" aria-label={`${collapsed.includes(project.id) ? t("Déplier") : t("Replier")} ${project.name}`} aria-expanded={!collapsed.includes(project.id)} onClick={() => setCollapsed((current) => current.includes(project.id) ? current.filter((item) => item !== project.id) : [...current, project.id])}><Icon name="chevron" /></button> : <span className="folder-branch" aria-hidden="true" />}
           <button className="project-button" aria-current={currentId === project.id ? 'page' : undefined} onClick={() => onSelect(project.id)} title={projectPath(mailbox.projects, project.id)}>
             <span className="folder-icon" style={{ color: projectColor(project.color) }}><Icon name="folder" /></span>
-            <span className="folder-text">{!project.parentId ? <small>{project.id}</small> : null}<span>{project.name}</span></span>
+            <span className="folder-text">{!project.parentId && project.code !== null ? <small>{project.code ?? project.id}</small> : null}<span>{project.name}</span></span>
             <b aria-label={t("{0} conversation{1}", count, count > 1 ? 's' : '')}>{count}</b>
           </button>
           <button className="folder-edit icon-button" aria-label={t("Modifier le dossier {0}", projectPath(mailbox.projects, project.id))} title={t("Modifier le dossier")} disabled={disabled} onClick={() => open(project)}><Icon name="edit" /></button>
@@ -135,7 +136,7 @@ export function ProjectFolders({ mailbox, revision, currentId, sort, order, disa
       }}>
         <header><div><span className="eyebrow">{t("Dossier de projet")}</span><h2 id={`${id}-title`}>{editingId ? t("Modifier le dossier") : t("Créer un dossier")}</h2></div><button className="icon-button" type="button" aria-label={t("Fermer")} onClick={() => dialog.current!.close()}><Icon name="close" /></button></header>
         <p id={`${id}-description`}>{t("Nom, couleur et position partagés avec toute l’équipe.")}</p>
-        {!input.parentId ? <label className="dialog-field" htmlFor={`${id}-code`}>{t("Code du projet")}<input id={`${id}-code`} ref={codeInput} value={input.id} required maxLength={32} readOnly={!!editingId} placeholder={t("Ex. 2401")} onChange={(event) => setInput({ ...input, id: event.target.value })} />{editingId ? <small>{t("Le code reste identique pour conserver les échanges associés.")}</small> : <small>{t("Lettres, chiffres, tirets et points. Un code unique par dossier.")}</small>}</label> : null}
+        {!input.parentId && (!editingId || mailbox.projects.find((item) => item.id === editingId)?.code !== null) ? <label className="dialog-field" htmlFor={`${id}-code`}>{t("Code du projet")}<input id={`${id}-code`} ref={codeInput} value={input.id} required maxLength={32} readOnly={!!editingId} placeholder={t("Ex. 2401")} onChange={(event) => setInput({ ...input, id: event.target.value })} />{editingId ? <small>{t("Le code reste identique pour conserver les échanges associés.")}</small> : <small>{t("Lettres, chiffres, tirets et points. Un code unique par dossier.")}</small>}</label> : null}
         <label className="dialog-field" htmlFor={`${id}-name`}>{input.parentId ? t("Nom du sous-dossier") : t("Nom du projet")}<input id={`${id}-name`} ref={nameInput} value={input.name} required maxLength={100} placeholder={t("Ex. Infrastructure")} onChange={(event) => setInput({ ...input, name: event.target.value })} /></label>
         <label className="dialog-field">{t("Dossier parent")}<select value={input.parentId ?? ''} onChange={(event) => {
           const parentId = event.target.value || null
@@ -147,7 +148,7 @@ export function ProjectFolders({ mailbox, revision, currentId, sort, order, disa
         <div className="folder-preview"><span className="folder-icon" style={{ color: projectColor(input.color) }}><Icon name="folder" /></span><span>{!input.parentId ? <small>{input.id.trim() || 'CODE'}</small> : <small>{projectPath(mailbox.projects, input.parentId)}</small>}<strong>{input.name.trim() || t("Nom du projet")}</strong></span></div>
         {error ? <p className="dialog-error" role="alert">{error}</p> : null}
         {error && sharedProject ? <div className="folder-conflict"><span>{t("Version partagée actuelle")}</span><p><span className="project-dot" style={{ backgroundColor: projectColor(sharedProject.color) }} />{sharedProject.id} — {sharedProject.name}</p><button className="secondary-button" type="button" onClick={() => open(sharedProject)}>{t("Charger cette version")}</button></div> : null}
-        <footer>{editingId ? <><button className="danger-button" type="button" disabled={disabled} onClick={async () => {
+        <footer>{editingId ? <><button className="danger-button" type="button" disabled={disabled || !allowDelete} title={!allowDelete ? t("Supprimez les dossiers IMAP depuis votre client mail après vérification.") : undefined} onClick={async () => {
           if (!window.confirm(t("Supprimer « {0} » ? Le dossier doit être vide et sans sous-dossier.", input.name))) return
           const failure = await onDelete(editingId, expectedRevision)
           if (failure) { setError(failure.message); setExpectedRevision(failure.revision) } else dialog.current!.close()

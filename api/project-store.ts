@@ -1,22 +1,22 @@
 import { BadRequestException, ConflictException, type OnApplicationShutdown } from '@nestjs/common'
 import { Pool } from 'pg'
 import { isProjectSettings } from '../shared/projects.js'
-import type { ConversationState, ProjectSettings } from '../shared/mailbox.js'
+import type { ConversationState, ProjectSettings, Mailbox } from '../shared/mailbox.js'
 import { isConversationUpdate } from '../shared/conversation-state.js'
 import { demoMailbox } from './demo-mailbox.js'
 
 const stateColumns = 'id, revision, unread, status, project_id AS "projectId", label_ids AS "labelIds"'
 
 export class ProjectStore implements OnApplicationShutdown {
-  private pool = new Pool({ connectionString: process.env.DATABASE_URL ?? 'postgresql://mailer_demo:mailer_demo@127.0.0.1:55432/mailer_support', connectionTimeoutMillis: 5000 })
-  constructor(private mailboxId = 'support-demo') {}
+  protected pool = new Pool({ connectionString: process.env.DATABASE_URL ?? 'postgresql://mailer_demo:mailer_demo@127.0.0.1:55432/mailer_support', connectionTimeoutMillis: 5000 })
+  constructor(protected mailboxId = 'support-demo', private seedMailbox: Mailbox = demoMailbox) {}
 
   async init() {
     await this.pool.query(`CREATE TABLE IF NOT EXISTS demo_project_settings (
       mailbox_id text PRIMARY KEY, revision integer NOT NULL DEFAULT 0 CHECK (revision >= 0), settings jsonb NOT NULL
     )`)
     await this.pool.query('INSERT INTO demo_project_settings (mailbox_id, settings) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-      [this.mailboxId, { projects: demoMailbox.projects, labels: demoMailbox.labels ?? [], order: demoMailbox.projects.map((item) => item.id), sort: 'manual' }])
+      [this.mailboxId, { projects: this.seedMailbox.projects, labels: this.seedMailbox.labels ?? [], order: this.seedMailbox.projects.map((item) => item.id), sort: 'manual' }])
     await this.pool.query(`CREATE TABLE IF NOT EXISTS demo_conversation_state (
       mailbox_id text NOT NULL REFERENCES demo_project_settings(mailbox_id) ON DELETE CASCADE,
       id text NOT NULL, revision integer NOT NULL DEFAULT 0 CHECK (revision >= 0),
@@ -25,10 +25,10 @@ export class ProjectStore implements OnApplicationShutdown {
     )`)
     await this.pool.query('ALTER TABLE demo_conversation_state ADD COLUMN IF NOT EXISTS project_id text, ADD COLUMN IF NOT EXISTS label_ids text[] NOT NULL DEFAULT ARRAY[]::text[]')
     const settings = await this.read()
-    const seeds = demoMailbox.conversations.map((message) => ({ ...message,
+    const seeds = this.seedMailbox.conversations.map((message) => ({ ...message,
       projectId: settings.projects.some((item) => item.id === message.projectId) ? message.projectId : settings.projects[0].id,
       labelIds: (message.labelIds ?? []).flatMap((id) => {
-        const source = demoMailbox.labels?.find((item) => item.id === id)
+        const source = this.seedMailbox.labels?.find((item) => item.id === id)
         const label = settings.labels?.find((item) => item.id === id || item.name === source?.name)
         return label ? [label.id] : []
       }),
@@ -59,7 +59,7 @@ export class ProjectStore implements OnApplicationShutdown {
         const { rowCount } = await client.query('SELECT 1 FROM demo_conversation_state WHERE mailbox_id = $1 AND project_id = ANY($2::text[]) LIMIT 1', [this.mailboxId, deleted])
         if (rowCount) throw new BadRequestException('Déplacez les conversations avant de supprimer ce dossier.')
       }
-      const projects = input.projects.map(({ id, name, color, parentId }) => ({ id, name, color, parentId: parentId ?? null,
+      const projects = input.projects.map(({ id, name, color, parentId, code }) => ({ id, name, color, parentId: parentId ?? null, ...(code !== undefined ? { code } : {}),
         createdAt: previous.projects.find((item) => item.id === id)?.createdAt ?? new Date().toISOString() }))
       const labels = input.labels ?? []
       const removedLabels = (previous.labels ?? []).filter((item) => !labels.some((next) => next.id === item.id)).map((item) => item.id)

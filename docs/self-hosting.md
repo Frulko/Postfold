@@ -1,6 +1,6 @@
 # Self-hosting Postfold
 
-This guide deploys the **current fictional demo** on a Linux server with systemd. It does not connect a mailbox: IMAP/SMTP, sending, SSO and mailbox authorization are not implemented. Keep access restricted to your team; everyone with access can modify the same demo mailbox.
+This guide deploys Postfold on a Linux server with systemd, starting with the **fictional demo**. To connect a real IMAP/SMTP account, also follow [mailbox setup](mailbox-setup.md), which enables encrypted credentials and mandatory application access checks. SSO and per-user mailbox roles are not implemented. Keep access restricted to your team; everyone with access can modify the shared mailbox.
 
 ## Requirements and layout
 
@@ -232,16 +232,16 @@ Repeat the verification commands above. If the build fails, leave services stopp
 
 The demo currently performs schema changes on startup without versioned migrations. If an upgrade changed schema or data incompatibly, restore the matching pre-upgrade backup into a new database before starting the older build; reverting source alone cannot undo database changes.
 
-## SMTP/IMAP credential security — implementation requirement
+## SMTP/IMAP credential security
 
-**No SMTP/IMAP credentials are accepted or stored in this release, and credential encryption is not implemented yet.** Before connecting real mailboxes, the implementation must:
+**Live mode encrypts password-based IMAP/SMTP account configuration using AES-256-GCM.** Follow [mailbox setup](mailbox-setup.md) for the protected key file, account import and access gate. The security boundary is:
 
-- Encrypt stored passwords and OAuth refresh tokens using authenticated encryption, such as AES-256-GCM, with a fresh nonce per encryption and mailbox identity bound as authenticated associated data. Persist ciphertext, nonce, authentication tag and key version; never plaintext. Mailbox login passwords must be recoverable for authentication, so hashing alone cannot serve this purpose.
+- Store encrypted account configuration with a fresh nonce, authentication tag, key version and mailbox identity bound as associated data. Mailbox passwords must be recoverable for authentication, so hashing alone cannot serve this purpose. Provider OAuth/refresh tokens are not supported yet.
 - Keep encryption keys outside PostgreSQL, Git and browser storage, in an operator-managed secret store or restricted secret file. Decrypt only inside the authorized backend/worker. Plan key rotation and separate key backups; a database dump alone must not reveal credentials. Losing the keys means stored credentials cannot be recovered.
 - Require certificate-validated TLS for SMTP/IMAP; when using STARTTLS, require a successful upgrade before authentication and never fall back to plaintext. Send credential configuration to the backend over HTTPS and never return saved secrets to the UI, logs or error payloads.
-- Enforce SSO sessions and mailbox permissions on configuration and connection operations before enabling real accounts. Encryption protects stored secrets; a compromised running backend with key access can still decrypt them.
+- Require authenticated frontend and API requests in live mode; account configuration is a server-only CLI operation. SSO sessions, per-user roles and delegated account configuration remain planned. Encryption protects stored secrets; a compromised running backend with key access can still decrypt them.
 
-These requirements follow [OWASP's cryptographic storage guidance](https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html) and [secrets management guidance](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html). Protected deployment environment files above are bootstrap configuration, not an implementation of mailbox credential encryption.
+This boundary follows [OWASP's cryptographic storage guidance](https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html) and [secrets management guidance](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html). Deployment environment files remain protected bootstrap configuration; the mail account itself is encrypted in PostgreSQL.
 
 ## Troubleshooting
 

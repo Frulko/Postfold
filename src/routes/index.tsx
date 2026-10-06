@@ -2,7 +2,7 @@ import { useI18n } from '../lib/i18n'
 import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { filterConversations, mailboxRows, threadKey, updateSelection } from '../lib/mailbox'
-import { getDemoMailbox, saveProjectSettings, updateConversationState } from '../server/demo'
+import { getDemoMailbox, saveProjectSettings, updateConversationState, syncMailbox, sendReply } from '../server/demo'
 import { Icon } from '../components/icon'
 import { ProjectPicker } from '../components/project-picker'
 import { MailboxRefresh } from '../components/mailbox-refresh'
@@ -16,8 +16,7 @@ import { LabelManager, LabelPicker } from '../components/labels'
 export const Route = createFileRoute('/')({ loader: () => getDemoMailbox(), component: MailboxPage })
 
 type Note = { id: string; contactId: string; body: string; createdAt: string }
-type LocalData = { notes: Note[]; drafts: Record<string, string>; placements?: Record<string, string>; displayMode?: 'messages' | 'threads' }
-const storageKey = 'mailer-support:demo:v1'
+type LocalData = { notes: Note[]; drafts: Record<string, string>; sendRequests?: Record<string, string>; placements?: Record<string, string>; displayMode?: 'messages' | 'threads' }
 const initials = (name: string) => name.split(' ').map((part) => part[0]).slice(0, 2).join('')
 const demoPresence = [
   { name: 'Julie', initials: 'JD', state: 'online', activity: 'Disponible' },
@@ -33,6 +32,7 @@ function isLocalData(value: unknown): value is LocalData {
     Number.isFinite(Date.parse(note.createdAt))) &&
     !!value.drafts && typeof value.drafts === 'object' && !Array.isArray(value.drafts) &&
     Object.values(value.drafts).every((draft) => typeof draft === 'string') &&
+    (!('sendRequests' in value) || (!!value.sendRequests && typeof value.sendRequests === 'object' && !Array.isArray(value.sendRequests) && Object.values(value.sendRequests).every((id) => typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id)))) &&
     (!('displayMode' in value) || value.displayMode === 'messages' || value.displayMode === 'threads') &&
     (!('placements' in value) || (!!value.placements && typeof value.placements === 'object' &&
       !Array.isArray(value.placements) && Object.values(value.placements).every((id) => typeof id === 'string')))
@@ -42,12 +42,13 @@ function MailboxPage() {
   const { t, locale } = useI18n()
   const navigate = Route.useNavigate()
   const initialMailbox = Route.useLoaderData()
+  const storageKey = initialMailbox.connection ? `postfold:mailbox:${initialMailbox.connection.email}:v1` : 'mailer-support:demo:v1'
   const latestStates = useRef(initialMailbox.conversationStates)
   const stateQueue = useRef(Promise.resolve())
   const stateJobs = useRef(0)
   const [baseMailbox, setBaseMailbox] = useState(initialMailbox)
-  const refreshMailbox = useCallback(async () => {
-    const freshMailbox = await getDemoMailbox()
+  const refreshMailbox = useCallback(async (synchronize = true) => {
+    const freshMailbox = synchronize ? await syncMailbox() : await getDemoMailbox()
     const states = mergeConversationStates(latestStates.current, freshMailbox.conversationStates)
     latestStates.current = states
     setBaseMailbox((current) => ({ ...freshMailbox,
@@ -62,12 +63,14 @@ function MailboxPage() {
   const [labelId, setLabelId] = useState<string | null>(null)
   const [view, setView] = useState<'mail' | 'contacts'>('mail')
   const [status, setStatus] = useState('all')
-  const [selectedId, setSelectedId] = useState('plans')
-  const [contactId, setContactId] = useState('paul')
+  const [selectedId, setSelectedId] = useState(initialMailbox.conversations[0]?.id ?? '')
+  const [contactId, setContactId] = useState(initialMailbox.contacts[0]?.id ?? '')
+  const [sendBusy, setSendBusy] = useState(false)
   const [composerOpen, setComposerOpen] = useState(false)
   const [draft, setDraft] = useState('')
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({})
   const [local, setLocal] = useState<LocalData>({ notes: [], drafts: {} })
+  const localRef = useRef(local)
   const [storageReady, setStorageReady] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
@@ -103,6 +106,7 @@ function MailboxPage() {
         const parsed: unknown = JSON.parse(stored)
         if (!isLocalData(parsed)) throw new Error(t("Données locales non reconnues."))
         setLocal(parsed)
+        localRef.current = parsed
       }
       setStorageReady(true)
     } catch {
@@ -115,6 +119,7 @@ function MailboxPage() {
     try {
       localStorage.setItem(storageKey, JSON.stringify(next))
       setLocal(next)
+      localRef.current = next
       setError('')
       return true
     } catch {
@@ -129,13 +134,16 @@ function MailboxPage() {
     .filter((item) => (status === 'all' || (status === 'unread' ? item.unread : item.status === status)) && (!activeLabel || item.labelIds?.includes(activeLabel)))
   const displayMode = local.displayMode ?? 'messages'
   const rows = mailboxRows(conversations, displayMode)
-  const conversation = mailbox.conversations.find((item) => item.id === selectedId)!
-  const contact = mailbox.contacts.find((item) => item.id === (view === 'mail' ? conversation.contactId : contactId))!
-  const project = mailbox.projects.find((item) => item.id === conversation.projectId)!
+  const conversation = mailbox.conversations.find((item) => item.id === selectedId) ?? mailbox.conversations[0] ?? { id: '', projectId: '', contactId: '', subject: '', preview: '', body: '', time: '', status: 'open' as const, assignee: null, unread: false }
+  const contact = mailbox.contacts.find((item) => item.id === (view === 'mail' ? conversation.contactId : contactId)) ?? mailbox.contacts[0] ?? { id: '', name: '', email: '', company: '', phone: '' }
+  const project = mailbox.projects.find((item) => item.id === conversation.projectId) ?? mailbox.projects[0]
   const selectedProject = mailbox.projects.find((item) => item.id === projectId)
   const threadMessages = displayMode === 'threads' ? mailbox.conversations.filter((item) => threadKey(item) === threadKey(conversation)).sort((a, b) => (Date.parse(a.sentAt ?? '') || 0) - (Date.parse(b.sentAt ?? '') || 0)) : [conversation]
   const readingIds = threadMessages.map((item) => item.id)
-  const showConversation = !projectId || filterConversations(mailbox, projectId, '').some((item) => readingIds.includes(item.id))
+  const showConversation = mailbox.conversations.length > 0 && (!projectId || filterConversations(mailbox, projectId, '').some((item) => readingIds.includes(item.id)))
+  const delivery = mailbox.deliveries?.find((item) => item.targetId === conversation.id)
+  const currentConversation = useRef(conversation.id)
+  currentConversation.current = conversation.id
   const folderSettings: ProjectSettings = { ...baseMailbox.projectSettings, projects: mailbox.projects, labels: mailbox.labels ?? [] }
   const contactNotes = local.notes.filter((item) => item.contactId === contact.id)
   const note = noteDrafts[contact.id] ?? ''
@@ -192,7 +200,7 @@ function MailboxPage() {
   }
 
   // L’échange déjà affiché à l’arrivée est une ouverture. Les changements lu/non lu ne relancent pas cet effet.
-  useEffect(() => { void changeConversations(expandRows([selectedId]), { unread: false }, false) }, [storageReady])
+  useEffect(() => { if (storageReady && conversation.id && conversation.imapReady !== false) void changeConversations(expandRows([conversation.id]), { unread: false }, false) }, [storageReady, conversation.id, conversation.imapReady])
 
   function clearSelection() {
     setChosenIds([])
@@ -264,6 +272,30 @@ function MailboxPage() {
     setNotice('')
   }
 
+  async function send() {
+    if (sendBusy || !mailbox.connection || !draft.trim() || delivery || conversation.outgoing) return
+    const targetId = conversation.id
+    const revision = latestStates.current.find((item) => item.id === targetId)?.revision
+    if (revision === undefined) return
+    const requestId = local.sendRequests?.[targetId] ?? crypto.randomUUID()
+    const saved = { ...local, drafts: { ...local.drafts, [targetId]: draft }, sendRequests: { ...local.sendRequests, [targetId]: requestId } }
+    if (!save(saved)) return
+    setSendBusy(true)
+    setNotice('')
+    try {
+      const result = await sendReply({ data: { id: targetId, revision, text: draft, requestId } })
+      if (result.ok) {
+        const latest = localRef.current
+        const drafts = { ...latest.drafts }; delete drafts[targetId]
+        const sendRequests = { ...latest.sendRequests }; delete sendRequests[targetId]
+        if (save({ ...latest, drafts, sendRequests }) && currentConversation.current === targetId) { setDraft(''); setComposerOpen(false) }
+        setNotice(t(result.sentCopy ? "Réponse acceptée par le serveur SMTP." : "Réponse acceptée par SMTP ; copie dans Envoyés non confirmée. Ne renvoyez pas le mail."))
+      } else setNotice(t(result.error ?? "Envoi non confirmé. Le brouillon est conservé ; vérifiez Envoyés avant de réessayer."))
+      await refreshMailbox(false).catch(() => { setConversationFailed(true); setConversationFeedback(t("Actualisation impossible. Vos données restent affichées.")) })
+    } catch { setNotice(t("Envoi non confirmé. Le brouillon est conservé ; vérifiez Envoyés avant de réessayer.")) }
+    finally { setSendBusy(false) }
+  }
+
   function selectProject(id: string | null, threadId?: string) {
     const first = threadId ?? mailboxRows(filterConversations(mailbox, id, query), displayMode)[0]?.id
     if (first ? !openConversation(first) : !preserveDraft()) return
@@ -333,19 +365,19 @@ function MailboxPage() {
     <div className="workspace">
       <aside className="sidebar" aria-label={t("Navigation principale")}>
         <a className="brand" href={`/?lang=${locale}`} aria-label={t("Postfold, accueil")}><span className="brand-mark"><Icon name="mail" /></span>Postfold<span className="brand-label">{t("Support")}</span></a>
-        <div className="workspace-name"><span className="workspace-avatar">S</span><div>{t("Équipe support")}<small>{t("Espace de démonstration")}</small></div></div>
+        <div className="workspace-name"><span className="workspace-avatar">S</span><div>{t("Équipe support")}<small>{mailbox.connection?.email ?? t("Espace de démonstration")}</small></div></div>
         <nav className="main-nav">
           <button className={view === 'mail' && !projectId ? 'nav-button active' : 'nav-button'} onClick={() => selectProject(null)}><Icon name="mail" />{t("Boîte de réception")}<b>{mailboxRows(mailbox.conversations, displayMode).length}</b></button>
           <button className={view === 'contacts' ? 'nav-button active' : 'nav-button'} onClick={() => { if (!preserveDraft()) return; setView('contacts'); setComposerOpen(false); setNotice(''); clearSelection() }}><Icon name="users" />{t("Contacts")}<b>{mailbox.contacts.length}</b></button>
         </nav>
-        <ProjectFolders mailbox={mailbox} revision={folderSettings.revision} currentId={view === 'mail' ? projectId : null} sort={folderSettings.sort} order={folderSettings.order} disabled={folderBusy} dropTarget={dropTarget} movingMail={!!draggingIds.length}
+        <ProjectFolders mailbox={mailbox} revision={folderSettings.revision} currentId={view === 'mail' ? projectId : null} sort={folderSettings.sort} order={folderSettings.order} disabled={folderBusy} allowDelete={!mailbox.connection} dropTarget={dropTarget} movingMail={!!draggingIds.length}
           onSelect={selectProject} onSave={saveFolder} onSort={sortFolders} onReorder={reorderFolder} onDelete={async (id, revision) => { const projects = mailbox.projects.filter((item) => item.id !== id); const failure = await commitFolders({ ...folderSettings, revision, projects, order: folderSettings.order.filter((item) => item !== id) }); if (!failure && projectId === id) setProjectId(null); return failure }}
           onMailOver={(event, id) => { if (!dragSession.current.length) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTarget(id) }}
           onMailLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null) }}
           onMailDrop={(event, id) => { if (!dragSession.current.length) return; event.preventDefault(); move(dragSession.current, id); finishDrag() }} />
         <LabelManager labels={mailbox.labels ?? []} conversations={mailbox.conversations} revision={folderSettings.revision} disabled={folderBusy} selectedId={activeLabel} onSelect={(id) => { setLabelId(id); setView('mail'); clearSelection() }} onSave={async (labels, revision) => { const failure = await commitFolders({ ...folderSettings, labels, revision }); if (!failure) await refreshMailbox(); return failure }} />
         {folderFeedback ? <p className={`folder-feedback ${folderFailed ? 'failed' : ''}`} role={folderFailed ? 'alert' : 'status'}>{folderFeedback}</p> : null}
-        <div className="sidebar-bottom"><span className="user-avatar">JD</span><div>{t("Julie · Démo")}<small>{t("Votre espace de travail")}</small></div></div>
+        <div className="sidebar-bottom"><span className="user-avatar">{mailbox.connection ? 'PF' : 'JD'}</span><div>{t(mailbox.connection ? "Boîte partagée" : "Julie · Démo")}<small>{t("Votre espace de travail")}</small></div></div>
       </aside>
 
       <main className="main">
@@ -353,8 +385,8 @@ function MailboxPage() {
           <div className="breadcrumb"><span>{t("Support")}</span><Icon name="chevron" /><strong>{view === 'contacts' ? t("Contacts") : selectedProject?.name ?? t("Tous les échanges")}</strong></div>
           <div className="header-indicators">
             <select className="language-switch" aria-label={t("Langue")} value={locale} onChange={(event) => { setConversationFeedback(''); setFolderFeedback(''); setNotice(''); void navigate({ search: { lang: event.target.value === 'en' ? 'en' : 'fr' }, replace: true }) }}><option value="fr">FR</option><option value="en">EN</option></select>
-            <MailboxRefresh onRefresh={refreshMailbox} />
-            <div className="presence-group">
+            <MailboxRefresh onRefresh={refreshMailbox} connected={!!mailbox.connection} />
+            {!mailbox.connection ? <div className="presence-group">
               <ul className="presence-list" aria-label={t("Présences de démonstration")}>
                 {demoPresence.map((person) => <li className="presence-item" key={person.name}>
                   <span className={`presence-avatar ${person.state}`} role="img" tabIndex={0} aria-label={t("{0} : {1}, présence simulée", person.name, t(person.activity))} aria-describedby={`presence-${person.name}`}>
@@ -364,11 +396,11 @@ function MailboxPage() {
                 </li>)}
               </ul>
               <span className="presence-count">{demoPresence.length} {t("en ligne")} <span className="sr-only">{t("dans la démonstration")}</span></span>
-            </div>
-            <span className="demo-badge">{t("Démonstration")}</span>
+            </div> : null}
+            <span className="demo-badge">{t(mailbox.connection ? "IMAP / SMTP" : "Démonstration")}</span>
           </div>
         </header>
-        <div className="demo-banner"><Icon name="info" /><span>{t("Dossiers, classement, labels et suivi partagés avec l’équipe. Aucune boîte mail connectée ; notes et brouillons restent locaux dans cette démo.")}</span></div>
+        <div className="demo-banner"><Icon name="info" /><span>{t(mailbox.connection ? "Boîte IMAP connectée · réponses SMTP protégées contre les doublons. Notes et brouillons restent dans ce navigateur." : "Dossiers, classement, labels et suivi partagés avec l’équipe. Aucune boîte mail connectée ; notes et brouillons restent locaux dans cette démo.")}{mailbox.connection?.error ? ` ${t("La dernière relève a échoué ; les mails en cache sont conservés.")}` : ''}</span></div>
         {error ? <div role="alert" className="error-banner">{error}</div> : null}
         {conversationFeedback ? <div role={conversationFailed ? 'alert' : 'status'} className={`conversation-feedback ${conversationFailed ? 'failed' : ''}`}>{conversationFeedback}</div> : null}
         <div className="content-grid">
@@ -430,18 +462,18 @@ function MailboxPage() {
                 return displayMode === 'threads' ? <details className="message thread-message" key={message.id} data-message-id={message.id} open={message.id === selectedId}><summary>{header}<Icon name="chevron" /></summary>{body}</details> : <article className="message" key={message.id} data-message-id={message.id}><header>{header}</header>{body}</article>
               })}
               {composerOpen ? <form className="composer" onSubmit={(event) => { event.preventDefault(); if (save({ ...local, drafts: { ...local.drafts, [conversation.id]: draft } })) setNotice(t("Brouillon enregistré dans ce navigateur. Aucun email envoyé.")) }}>
-                <label htmlFor="reply">{t("Votre brouillon")} <small>{t("À :")} {contact.email}</small></label><textarea id="reply" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={t("Bonjour…")} rows={7} />
-                <footer><span id="send-unavailable">{t("Connectez une boîte mail pour envoyer.")}</span><div className="composer-actions"><button className="secondary-button" disabled={!storageReady} type="submit">{t("Enregistrer le brouillon")}</button><button className="primary-button" type="button" disabled aria-describedby="send-unavailable" title={t("Aucune boîte mail connectée")}><Icon name="send" />{t("Envoyer")}</button></div></footer>
+                <label htmlFor="reply">{t("Votre brouillon")} <small>{t("À :")} {contact.email}</small></label><textarea id="reply" value={draft} disabled={sendBusy} onChange={(event) => setDraft(event.target.value)} placeholder={t("Bonjour…")} rows={7} maxLength={100_000} />
+                <footer><span id="send-unavailable">{t(!mailbox.connection ? "Connectez une boîte mail pour envoyer." : delivery ? delivery.status === 'sent' ? "Une réponse a déjà été envoyée à ce mail." : "Envoi en cours ou incertain : vérifiez Envoyés, ne renvoyez pas." : "Le brouillon sera sauvegardé avant l’envoi.")}</span><div className="composer-actions"><button className="secondary-button" disabled={!storageReady || sendBusy} type="submit">{t("Enregistrer le brouillon")}</button><button className="primary-button" type="button" disabled={!mailbox.connection || !storageReady || !draft.trim() || sendBusy || stateBusy || !!delivery || !!conversation.outgoing} onClick={() => void send()} aria-describedby="send-unavailable" aria-busy={sendBusy}><Icon name="send" />{t(sendBusy ? "Envoi…" : "Envoyer")}</button></div></footer>
               </form> : <div className="reply-bar"><span>{local.drafts[conversation.id] ? t("Brouillon enregistré") : t("Aucune réponse préparée")}</span><button className="primary-button" onClick={() => beginReply()}><Icon name="reply" />{local.drafts[conversation.id] ? t("Reprendre le brouillon") : t("Préparer une réponse")}</button></div>}
             </> : <div className="empty-folder"><span className="empty-folder-icon" style={{ color: projectColor(selectedProject?.color ?? 'slate') }}><Icon name="folder" /></span><span className="eyebrow">{selectedProject ? projectPath(mailbox.projects, selectedProject.id) : t("Dossier indisponible")}</span><h2>{t("Ce dossier est vide")}</h2><p>{t("Déposez des conversations dans ce dossier ou utilisez « Déplacer vers un projet » depuis la boîte de réception.")}</p></div> : <div className="contact-history"><span className="eyebrow">{t("Historique des échanges")}</span><h2>{t("Les échanges avec")} {contact.name.split(' ')[0]}</h2><p>{t("Tous les projets et conversations associés à ce contact.")}</p>{mailbox.conversations.filter((item) => item.contactId === contact.id).map((item) => <button className="history-item" key={item.id} onClick={() => selectProject(item.projectId, item.id)}><span><strong>{item.subject}</strong><small>{mailbox.projects.find((project) => project.id === item.projectId)?.name}</small></span><span className={`status ${item.status}`}>{t(statuses[item.status])}</span></button>)}</div>}
             {notice ? <p role="status" className="notice">{notice}</p> : null}
           </section>
 
-          {view === 'contacts' || showConversation ? <aside className="contact-panel" aria-label={t("Fiche du contact")}>
+          {(view === 'contacts' && mailbox.contacts.length > 0) || showConversation ? <aside className="contact-panel" aria-label={t("Fiche du contact")}>
             <span className="section-label">{t("Fiche contact")}</span><div className="profile-avatar">{initials(contact.name)}</div><h2>{contact.name}</h2><p className="company">{contact.company}</p>
             <dl className="contact-details"><dt>{t("Email")}</dt><dd>{contact.email}</dd><dt>{t("Téléphone")}</dt><dd>{contact.phone}</dd></dl>
             <div className="panel-section"><h3>{t("Projets associés")}</h3>{mailbox.projects.filter((item) => mailbox.conversations.some((thread) => thread.contactId === contact.id && thread.projectId === item.id)).map((item) => <button key={item.id} className="linked-project" onClick={() => selectProject(item.id)}><span className="project-dot" style={{ backgroundColor: projectColor(item.color) }} /><span>{projectPath(mailbox.projects, item.id)}</span><Icon name="arrow" /></button>)}</div>
-            <div className="panel-section"><h3>{t("Notes internes")} <span>{contactNotes.length}</span></h3>{contactNotes.map((item) => <article className="contact-note" key={item.id}><p>{item.body}</p><small>Julie · {new Date(item.createdAt).toLocaleDateString(locale === 'en' ? 'en-GB' : 'fr-FR')}</small></article>)}
+            <div className="panel-section"><h3>{t("Notes internes")} <span>{contactNotes.length}</span></h3>{contactNotes.map((item) => <article className="contact-note" key={item.id}><p>{item.body}</p><small>{mailbox.connection ? t("Note locale") : "Julie"} · {new Date(item.createdAt).toLocaleDateString(locale === 'en' ? 'en-GB' : 'fr-FR')}</small></article>)}
               <form onSubmit={(event) => { event.preventDefault(); const body = note.trim(); if (!body) return; if (save({ ...local, notes: [...local.notes, { id: crypto.randomUUID(), contactId: contact.id, body, createdAt: new Date().toISOString() }] })) { setNote(''); setNotice(t("Note enregistrée dans ce navigateur.")) } }}>
                 <label className="sr-only" htmlFor="contact-note">{t("Ajouter une note sur")} {' '}{contact.name}</label><textarea id="contact-note" value={note} onChange={(event) => setNote(event.target.value)} placeholder={t("Un détail utile pour la prochaine fois…")} rows={4} maxLength={5000} />
                 <button className="note-button" disabled={!storageReady || !note.trim()} type="submit"><Icon name="plus" />{t("Ajouter une note")}</button>

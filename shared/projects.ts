@@ -33,6 +33,7 @@ export function isProject(value: unknown): value is Project {
     typeof item.name === 'string' && item.name === item.name.trim() && item.name.length > 0 && item.name.length <= 100 &&
     !/[\u0000-\u001f/\\]/.test(item.name) && typeof item.color === 'string' && isProjectColor(item.color) &&
     (item.parentId === undefined || item.parentId === null || (typeof item.parentId === 'string' && item.parentId.length > 0)) &&
+    (item.code === undefined || item.code === null || (typeof item.code === 'string' && /^[a-z0-9][a-z0-9._-]{0,31}$/i.test(item.code))) &&
     (item.createdAt === undefined || (typeof item.createdAt === 'string' && Number.isFinite(Date.parse(item.createdAt))))
 }
 
@@ -78,7 +79,7 @@ export function isProjectHierarchy(projects: Project[]) {
 export function projectPath(projects: Project[], id: string): string {
   const project = projects.find((item) => item.id === id)
   if (!project) return ''
-  return project.parentId ? `${projectPath(projects, project.parentId)} / ${project.name}` : `${project.id} — ${project.name}`
+  return project.parentId ? `${projectPath(projects, project.parentId)} / ${project.name}` : project.code === null ? project.name : `${project.code ?? project.id} — ${project.name}`
 }
 
 export function projectTree(projects: Project[], sort: ProjectSort, order: string[], collapsed: string[] = [], query = '') {
@@ -103,7 +104,7 @@ export function sortProjects(projects: Project[], sort: ProjectSort, order: stri
   if (sort === 'manual') return manual
   const compare = (a: string, b: string) => a.localeCompare(b, 'fr', { sensitivity: 'base', numeric: true })
   return manual.sort((a, b) => {
-    if (sort === 'code') return compare(a.id, b.id)
+    if (sort === 'code') return compare(a.code === null ? a.name : a.code ?? a.id, b.code === null ? b.name : b.code ?? b.id)
     if (sort === 'name-asc' || sort === 'name-desc') return compare(a.name, b.name) * (sort === 'name-desc' ? -1 : 1) || compare(a.id, b.id)
     const dates = (a.createdAt ? Date.parse(a.createdAt) : 0) - (b.createdAt ? Date.parse(b.createdAt) : 0)
     return dates * (sort === 'recent' ? -1 : 1) || compare(a.id, b.id)

@@ -15,6 +15,7 @@ A familiar email interface with project folders, conversation tracking and conta
 - First-gesture drag-and-drop and batch actions that keep the list stable.
 - Contacts, conversation history, notes and saved drafts.
 - French/English interface, IT support demo, search and automatic refresh.
+- Optional IMAP/SMTP connection, encrypted credentials and duplicate-send protection.
 
 See the [feature gallery and technical guide](docs/guide.md) for screenshots and details.
 
@@ -29,7 +30,7 @@ pnpm dev
 
 Open **http://127.0.0.1:3002**. PostgreSQL and the separate API start automatically.
 
-**Early demo:** fictional IT support data, French/English interface, no connected mailbox or authentication. Sending is disabled and presence is simulated. Notes and drafts are still browser-local. IMAP/SMTP, SSO and offline sync are planned.
+**Default demo:** fictional IT support data, sending disabled and simulated presence. To use a real account, follow [mailbox setup](docs/mailbox-setup.md): live mode requires authentication and encrypted credentials. Notes and drafts remain browser-local; SSO and offline sync are planned.
 
 ## Development
 
