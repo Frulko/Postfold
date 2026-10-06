@@ -118,6 +118,8 @@ jobs:
             docker pull --platform "linux/$arch" "$IMAGE@$DIGEST"
             docker tag "$IMAGE@$DIGEST" "postfold:${GITHUB_REF_NAME#v}"
             docker image save --platform "linux/$arch" "postfold:${GITHUB_REF_NAME#v}" | gzip > "release/postfold-linux-$arch.tar.gz"
+            # Classic Docker storage cannot keep both architectures under one index digest.
+            docker image rm "$IMAGE@$DIGEST" "postfold:${GITHUB_REF_NAME#v}"
           done
           tar -czf release/postfold-deploy.tar.gz deploy docs LICENSE
           (cd release && sha256sum ./*.tar.gz image.txt > SHA256SUMS)
