@@ -24,7 +24,8 @@
     "test:mail": "pnpm db:up && pnpm build:api && node scripts/check-live-mail.mjs",
     "test:sso": "pnpm db:up && pnpm build && node scripts/check-keycloak.mjs",
     "mailbox:configure": "pnpm build:api && node api/dist/api/configure-mailbox.js",
-    "test:drag": "node scripts/check-mail-drag.mjs"
+    "test:drag": "node scripts/check-mail-drag.mjs",
+    "test:container": "node scripts/check-container.mjs"
   },
   "dependencies": {
     "@nestjs/common": "12.1.2",

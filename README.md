@@ -36,6 +36,10 @@ Open **http://127.0.0.1:3002**. PostgreSQL and the separate API start automatica
 
 **Default demo:** fictional IT support data, sending disabled and simulated presence. To use a real account, follow [mailbox setup](docs/mailbox-setup.md). Enable [Keycloak SSO](docs/keycloak.md) for individual access. Notes and drafts remain browser-local; offline sync is planned.
 
+## Deploy and update
+
+[Public releases](https://github.com/Frulko/Postfold/releases) include compiled builds, Docker images (AMD64/ARM64) and deployment configuration. Follow [Docker deployment and updates](docs/docker.md), or use [Linux/systemd](docs/self-hosting.md). CI validates real mail, Keycloak and production containers before publishing.
+
 ## Development
 
 ```sh

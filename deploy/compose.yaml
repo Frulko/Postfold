@@ -1,0 +1,73 @@
+name: postfold
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postfold
+      POSTGRES_DB: postfold
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postfold-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U postfold -d postfold']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  api:
+    image: ${POSTFOLD_IMAGE:?Select a Postfold image}
+    command: [node, api/dist/api/main.js]
+    environment:
+      DATABASE_URL: postgresql://postfold:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@db:5432/postfold
+      MAILBOX_MODE: ${MAILBOX_MODE:-imap}
+      DEMO_MODE: ${DEMO_MODE:-false}
+      MAILBOX_ID: ${MAILBOX_ID:-support}
+      MAILBOX_SYNC_LIMIT: ${MAILBOX_SYNC_LIMIT:-200}
+      POSTFOLD_AUTH: ${POSTFOLD_AUTH:-keycloak}
+      POSTFOLD_ORIGIN: ${POSTFOLD_ORIGIN:?Set the public HTTPS origin}
+      KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-postfold}
+      KEYCLOAK_REQUIRED_ROLE: ${KEYCLOAK_REQUIRED_ROLE:-support}
+      KEYCLOAK_CLIENT_SECRET_FILE: /run/postfold/secrets/keycloak-client.secret
+      MAILBOX_KEY_FILE: /run/postfold/secrets/mailbox.key
+      MAILBOX_KEY_ID: ${MAILBOX_KEY_ID:-v1}
+      POSTFOLD_ACCESS_FILE: /run/postfold/secrets/access.json
+      MAILBOX_CA_FILE: ${MAILBOX_CA_FILE:-}
+    volumes:
+      - ./secrets:/run/postfold/secrets:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:4000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      start_period: 20s
+      retries: 20
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  web:
+    image: ${POSTFOLD_IMAGE:?Select a Postfold image}
+    environment:
+      API_ORIGIN: http://api:4000
+      MAILBOX_MODE: ${MAILBOX_MODE:-imap}
+      POSTFOLD_AUTH: ${POSTFOLD_AUTH:-keycloak}
+      POSTFOLD_ORIGIN: ${POSTFOLD_ORIGIN:?Set the public HTTPS origin}
+    ports:
+      - '127.0.0.1:${POSTFOLD_WEB_PORT:-3002}:3002'
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3002/', {redirect: 'manual'}).then(r => process.exit([200, 401, 302, 303].includes(r.status) ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      start_period: 20s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  postfold-postgres:

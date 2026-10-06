@@ -1,0 +1,13 @@
+.git
+.github
+node_modules
+.output
+.tanstack
+api/dist
+dist
+**/.env
+**/.env.*
+deploy
+docs/screenshots
+**/*.log
+.DS_Store

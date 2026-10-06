@@ -1,5 +1,7 @@
 # Self-hosting Postfold
 
+For prebuilt images, public downloads and Compose updates, use [Docker deployment](docker.md). This guide covers Linux/systemd; release runtime archives can replace the source-build step.
+
 This guide deploys Postfold on a Linux server with systemd, starting with the **fictional demo**. To connect a real IMAP/SMTP account, also follow [mailbox setup](mailbox-setup.md). Enable [Keycloak SSO](keycloak.md) for individual sessions and client-role access control. Everyone with the configured mailbox role can modify the shared mailbox.
 
 ## Requirements and layout

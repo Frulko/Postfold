@@ -8,3 +8,5 @@ api/dist/
 !.env.example
 .DS_Store
 *.log
+deploy/secrets/
+deploy/backups/
