@@ -170,6 +170,7 @@ The intended boundary keeps messages and project folders in IMAP, with collabora
 
 - Connect IMAP/SMTP and synchronize folders, message moves and read flags.
 - Add SSO sessions, mailbox authorization and API guards before enabling real accounts.
+- Encrypt SMTP/IMAP passwords and OAuth refresh tokens with keys outside the database; require certificate-validated TLS. See the [credential security requirements](self-hosting.md#smtpimap-credential-security--implementation-requirement).
 - Add WebSocket presence, conversation reservations, a shared action history and server-validated send coordination.
 - Move notes, drafts and contact management into shared storage with conflict handling.
 - Add an offline PWA and evaluate TanStack DB and CRDTs for the parts that need concurrent editing.
@@ -202,9 +203,11 @@ To run compiled output, start PostgreSQL with `pnpm db:up`, then run these comma
 # Terminal 1: demo API; demo routes are otherwise disabled by default.
 DEMO_MODE=true pnpm start:api
 
-# Terminal 2: compiled frontend (Nitro uses its own default port).
-pnpm start
+# Terminal 2: compiled frontend with an explicit local address and port.
+NITRO_HOST=127.0.0.1 NITRO_PORT=3002 pnpm start
 ```
+
+For a server deployment, environment files, authenticated HTTPS, services, backups and updates, follow the [self-hosting guide](self-hosting.md). It covers the current demo; real mailbox connections remain planned.
 
 ## Contributing and license
 

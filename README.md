@@ -41,4 +41,4 @@ pnpm build
 
 With the dev server running and `agent-browser` installed, `pnpm test:drag` checks native drag-and-drop and list stability.
 
-[Contributing and commit conventions](CONTRIBUTING.md) · [Setup and architecture](docs/guide.md) · [AGPL-3.0-only license](LICENSE)
+[Contributing](CONTRIBUTING.md) · [Technical guide](docs/guide.md) · [Self-hosting](docs/self-hosting.md) · [AGPL-3.0-only license](LICENSE)
