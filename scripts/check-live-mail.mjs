@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync, execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
-import { existsSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, writeFileSync, rmSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomBytes, randomUUID, scryptSync } from 'node:crypto'
@@ -29,6 +29,8 @@ try {
   writeFileSync(join(directory, 'openssl.cnf'), '[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ext\n[dn]\nCN=localhost\n[ext]\nsubjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,digitalSignature,keyEncipherment,keyCertSign\nextendedKeyUsage=serverAuth\n')
   command('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2', '-config', join(directory, 'openssl.cnf'), '-keyout', join(directory, 'server.key'), '-out', join(directory, 'ca.pem')])
   command('openssl', ['pkcs12', '-export', '-name', 'greenmail', '-inkey', join(directory, 'server.key'), '-in', join(directory, 'ca.pem'), '-out', join(directory, 'server.p12'), '-passout', 'pass:test-only-keystore'])
+  // The host directory stays private; only the fictional keystore is mounted for GreenMail's non-root user.
+  chmodSync(join(directory, 'server.p12'), 0o644)
   const salt = randomBytes(16).toString('hex')
   writeFileSync(join(directory, 'mailbox.key'), randomBytes(32).toString('hex'), { mode: 0o600 })
   writeFileSync(join(directory, 'access.json'), JSON.stringify({ user: 'operator', salt, hash: scryptSync('test-only-access-password', salt, 64).toString('hex') }), { mode: 0o600 })
@@ -37,7 +39,7 @@ try {
   process.env.MAILBOX_KEY_FILE = join(directory, 'mailbox.key')
   process.env.POSTFOLD_ACCESS_FILE = join(directory, 'access.json')
   process.env.MAILBOX_CA_FILE = join(directory, 'ca.pem')
-  command('docker', ['run', '-d', '--name', container, '-p', '127.0.0.1::3993', '-p', '127.0.0.1::3465', '-p', '127.0.0.1::3025', '-p', '127.0.0.1::3143', '-v', `${directory}:/certs:ro`, '-e', 'GREENMAIL_OPTS=-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.users=support:test-only-mail-password@postfold.test,customer:test-only-customer-password@postfold.test -Dgreenmail.tls.keystore.file=/certs/server.p12 -Dgreenmail.tls.keystore.password=test-only-keystore -Dgreenmail.tls.key.password=test-only-keystore', 'greenmail/standalone:2.1.14'])
+  command('docker', ['run', '-d', '--name', container, '-p', '127.0.0.1::3993', '-p', '127.0.0.1::3465', '-p', '127.0.0.1::3025', '-p', '127.0.0.1::3143', '-v', `${join(directory, 'server.p12')}:/certs/server.p12:ro`, '-e', 'GREENMAIL_OPTS=-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.users=support:test-only-mail-password@postfold.test,customer:test-only-customer-password@postfold.test -Dgreenmail.tls.keystore.file=/certs/server.p12 -Dgreenmail.tls.keystore.password=test-only-keystore -Dgreenmail.tls.key.password=test-only-keystore', 'greenmail/standalone:2.1.14'])
   started = true
   const ports = JSON.parse(command('docker', ['inspect', container]))[0].NetworkSettings.Ports
   const imapPort = Number(ports['3993/tcp'][0].HostPort)
