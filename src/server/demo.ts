@@ -1,7 +1,7 @@
 import { createServerFn } from '@tanstack/react-start'
-import type { ConversationState, DemoMailbox, ProjectSettings } from '../../shared/mailbox'
+import type { Activity, ConversationState, DemoMailbox, ProjectSettings } from '../../shared/mailbox'
 import { isProjectSettings } from '../../shared/projects'
-import { isConversationUpdate } from '../../shared/conversation-state'
+import { isActivityIds, isConversationUpdate } from '../../shared/conversation-state'
 import { getRequestHeader } from '@tanstack/react-start/server'
 import { isReplyRequest } from '../../shared/mail-account'
 import { authMode } from '../../shared/auth'
@@ -28,6 +28,7 @@ export const updateConversationState = createServerFn({ method: 'POST' })
     if (!isConversationUpdate(input)) throw new Error('Sélection ou état de conversation invalide.')
     return input
   })
+
   .handler(async ({ data }): Promise<{ ok: boolean; states?: ConversationState[]; error?: string }> => {
     const response = await fetch(apiPath('/conversations/state'), {
       method: 'PATCH', headers: apiHeaders(), body: JSON.stringify(data), signal: AbortSignal.timeout(90_000),
@@ -38,6 +39,14 @@ export const updateConversationState = createServerFn({ method: 'POST' })
       return { ok: false, error: failure.message, states: failure.states }
     }
     throw new Error('La modification des états est indisponible. Aucun changement local n’a été appliqué ; vérifiez à la relève.')
+  })
+
+export const getConversationActivity = createServerFn({ method: 'POST' })
+  .validator((input: unknown) => { if (!isActivityIds(input)) throw new Error('Invalid activity selection.'); return input })
+  .handler(async ({ data }): Promise<Activity[]> => {
+    const response = await fetch(apiPath('/conversations/activity'), { method: 'POST', headers: apiHeaders(), body: JSON.stringify(data), signal: AbortSignal.timeout(15_000) })
+    if (!response.ok) throw new Error('Activity is unavailable.')
+    return response.json()
   })
 
 export const saveProjectSettings = createServerFn({ method: 'POST' })

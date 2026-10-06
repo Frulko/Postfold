@@ -250,7 +250,7 @@ h1 { font-size: 20px; font-weight: 650; letter-spacing: -.6px; line-height: 1.35
 
 .reading-pane { padding: 0 28px 30px; min-width: 0; }
 .reading-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; min-height: 65px; padding: 12px 0; border-bottom: 1px solid #f0f0f2; margin-bottom: 26px; }
-.assignee { font-size: 11px; color: var(--muted); }
+.row-assignee { display: grid; place-items: center; width: 22px; height: 22px; flex-shrink: 0; border-radius: 5px; background: var(--soft); color: var(--muted); font-size: 9px; }
 .message-heading { padding-bottom: 24px; }
 .message-heading .eyebrow { display: inline-block; background: #fafafa; border: 1px solid var(--line); border-radius: 5px; color: #52525b; font-size: 10px; padding: 4px 7px; margin-bottom: 12px; }
 .message-heading h2, .contact-history h2 { font-size: 24px; font-weight: 650; letter-spacing: -.7px; line-height: 1.35; }
@@ -411,6 +411,30 @@ textarea { width: 100%; border: 1px solid var(--line); border-radius: 7px; paddi
 .label-popup input { flex-shrink: 0; accent-color: var(--accent); }
 .label-popup p { padding: 10px; line-height: 1.6; }
 .bulk-actions > .label-picker { margin-top: 10px; }
+.assignment-picker { min-width: 0; }
+@media (max-width: 820px) {
+  .reading-toolbar { position: relative; }
+  .reading-toolbar > .label-picker { position: static; }
+  .reading-toolbar .label-popup { top: calc(100% + 6px); right: 0; }
+}
+.assignment-picker summary > span { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.assignment-popup { width: 270px; max-height: 320px; }
+.assignment-popup > input { width: 100%; min-height: 40px; padding: 8px; margin: 6px 0; border: 1px solid var(--line); border-radius: 6px; font-size: 11px; }
+.assignment-popup button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px; padding: 8px; border-radius: 5px; text-align: left; font-size: 11px; }
+.assignment-popup button:hover:not(:disabled), .assignment-popup button[aria-pressed=true] { background: var(--soft); }
+.assignment-popup button > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.assignment-popup .user-avatar { flex-shrink: 0; }
+.assignment-popup small { display: block; color: var(--muted); font-size: 10px; }
+.assignment-popup .assign-self { color: var(--accent); }
+.assignment-popup .remove-assignment { border-top: 1px solid var(--line); margin-top: 6px; border-radius: 0; }
+.conversation-activity { margin-top: 24px; border-top: 1px solid var(--line); font-size: 11px; }
+.conversation-activity summary { min-height: 40px; padding: 12px 0; cursor: pointer; font-weight: 600; }
+.conversation-activity ol { list-style: none; padding: 0; margin: 0; }
+.conversation-activity li { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.conversation-activity li > div { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; }
+.conversation-activity time, .conversation-activity small { color: var(--muted); font-size: 10px; }
+.conversation-activity p { margin: 6px 0; line-height: 1.6; overflow-wrap: anywhere; }
+.conversation-activity > div > small { display: block; margin-top: 12px; line-height: 1.6; }
 .message-labels { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .label-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 2px 5px; border: 1px solid var(--line); border-radius: 4px; font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
 @media (max-width: 820px) { .label-section nav { display: flex; flex-wrap: wrap; } .label-row { max-width: 100%; } }

@@ -14,6 +14,7 @@ Postfold brings project folders, conversation tracking and contact context into 
 | --- | --- |
 | Project folders | `ID - Project name` at the root; named subfolders, creation, editing, deletion of empty folders without children, preset/custom colors, descendant counts, search, manual ordering and six sort modes. Folder settings are shared in PostgreSQL. |
 | Conversation tracking | Read on opening; manual read/unread; independent Open, Waiting and Closed states; individual and atomic batch updates. States are shared in PostgreSQL. |
+| Assignment and activity | Assign to yourself or a known teammate, remove assignments, apply in batches and inspect the latest 50 recorded actions. Keycloak identities supply verified authors; concurrent writes use revision checks. |
 | Display modes | All messages with direct reply controls, or threads with counts and expandable messages. Grouping uses explicit thread IDs; display preference stays browser-local. |
 | Selection and filing | Checkboxes, range selection, select all, first-gesture drag-and-drop, a drag preview with a count badge, highlighted drop targets and a searchable destination picker. Filing uses revision checks and moves native IMAP messages in live mode. |
 | Labels | Shared creation, renaming, colors, ordering, deletion, search, filtering and single/batch assignment. Deleting a label removes it from every conversation in one transaction. |
@@ -91,6 +92,18 @@ Enable [Keycloak SSO](keycloak.md) to sign in individually and restrict mailbox 
 
 ![Shared IT support inbox with Alice Support authenticated through Keycloak and a Sign out button](screenshots/keycloak-session.png)
 
+### Assignment and activity
+
+Use the assignment control in the reader or batch actions to assign messages to yourself, search known teammates or remove assignments. Mixed batches show **Mixed assignment**. Keycloak teammates become available after opening this mailbox once; Postfold does not need Keycloak administration permissions. Default demo mode uses explicitly fictional teammates and Julie as its fictional action author.
+
+Assignment changes use the same revisions as read flags, workflow states, filing and labels. A conflict cancels the whole batch, returns current states and requires an explicit retry. Assignment stays in PostgreSQL and does not modify IMAP messages. In live mode, new messages in an existing thread inherit the most recent message's assignment; existing assignments survive native moves and synchronization. All messages mode changes one message, while Conversations mode changes all currently known messages in that thread.
+
+Open **Activity history** to see the latest 50 recorded state changes and SMTP send attempts for the displayed messages. Authors come from the verified API session. The journal captures actual before/after states in the same transaction; no-op or rejected writes create no entries. Send authors are persisted atomically with the send reservation before SMTP starts; the attempt shows sending, accepted or uncertain delivery without inventing a successful response. Duplicate retries reuse the original attempt and author.
+
+![Alice Support assigned to an IT support request, with verified authors and assignment changes in the activity history](screenshots/assignment-and-activity.png)
+
+Shared Basic access has no individual identity and appears as **Shared access**. Native-client changes cannot be attributed to a Postfold user. Older actions are not reconstructed; folder-catalog edits, label-catalog cleanup, local notes and local drafts are not included in this journal. Updates appear on refresh, without WebSocket presence or writing reservations. Assignment is responsibility tracking, not a lock or an additional permission.
+
 ### Mobile inbox
 
 Folder and label sections start collapsed on mobile. Expand them to use the compact, vertically scrollable tree. The conversation list, reader and contact panel stack vertically. Batch actions remain available without changing the position of the conversation rows.
@@ -157,7 +170,8 @@ Changing the search, conversation filter or project clears selection. A failed l
 | --- | --- | --- |
 | Folder tree, colors, order, sort and label catalog | PostgreSQL | Yes, on refresh. |
 | Read/unread and workflow states | PostgreSQL | Yes, on refresh. |
-| Messages, contacts and initial assignments | Demo fixtures returned by the API | Fictional fixtures. |
+| Messages and contacts | Demo fixtures, or IMAP/cache in live mode | Shared mailbox data; demo data is fictional. |
+| Teammate directory, assignments and recorded activity | PostgreSQL | Yes, on refresh. Demo identities are fictional. |
 | Conversation filing and label assignments | PostgreSQL | Yes, on refresh. |
 | Notes and drafts | Browser localStorage | No. |
 | Interface language | URL search parameter | Per user; does not change shared names. |
@@ -181,9 +195,9 @@ The intended boundary keeps messages and project folders in IMAP, with collabora
 ### Next milestones
 
 - Extend IMAP synchronization with incremental MODSEQ, attachment handling and robust reconciliation of ambiguous native changes.
-- Extend [Keycloak SSO](keycloak.md) with per-action roles, audit attribution and multi-mailbox permissions; individual sessions and client-role guards are implemented.
+- Extend [Keycloak SSO](keycloak.md) with per-action roles and multi-mailbox permissions; individual sessions, client-role guards, shared assignments and action attribution are implemented.
 - Add provider OAuth and key rotation; password-based IMAP/SMTP already uses authenticated encryption with keys outside PostgreSQL and certificate-validated TLS.
-- Add WebSocket presence, editing reservations and a shared action history; extend the durable send coordination with operator recovery and follow-up replies.
+- Add WebSocket presence and editing reservations; extend the recorded action history and durable send coordination with operator recovery and follow-up replies.
 - Move notes, drafts and contact management into shared storage with conflict handling.
 - Add an offline PWA and evaluate TanStack DB and CRDTs for the parts that need concurrent editing.
 - Add a plugin boundary and external API integrations, including meeting creation.

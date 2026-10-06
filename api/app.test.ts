@@ -68,6 +68,16 @@ test('l’API fonctionne et les données de démo exigent une activation explici
         assert.equal((await put({ ...accepted, order: [accepted.order[0], accepted.order[0]] })).status, 400)
         assert.equal((await put({ ...accepted, projects: accepted.projects.slice(1), order: accepted.order.slice(1) })).status, 400)
         assert.equal((await put({ ...accepted, projects: [...accepted.projects, { id: '2401', name: 'Duplicate', color: 'blue' }], order: [...accepted.order, '2401'] })).status, 400)
+        shared = await (await fetch(`${origin}/demo/mailbox`)).json()
+        const assign = { targets: [target('quote', shared.conversationStates)], assigneeId: 'demo-marc' }
+        assert.equal((await patch({ ...assign, actor: { id: 'forged', name: 'Forged author' } })).status, 400)
+        assert.equal((await patch({ ...assign, assigneeId: 'unknown' })).status, 400)
+        assert.equal((await patch(assign)).status, 200)
+        const history = await fetch(`${origin}/demo/conversations/activity`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(['quote']) })
+        assert.equal(history.status, 200)
+        const assigned = (await history.json()).find((item: { data: { after?: { assigneeId?: string } } }) => item.data.after?.assigneeId === 'demo-marc')
+        assert.equal(assigned.actor.id, 'demo-julie', 'Demo author is selected by the server, never the request body')
+        assert.equal(assigned.data.after.assignee, 'Marc Laurent')
       } else {
         assert.equal((await fetch(`${origin}/demo/projects`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 404)
         assert.equal((await fetch(`${origin}/demo/conversations/state`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 404)
@@ -79,6 +89,58 @@ test('l’API fonctionne et les données de démo exigent une activation explici
         try { await cleanup.query('DELETE FROM demo_project_settings WHERE mailbox_id = $1', [mailboxId]) } finally { await cleanup.end() }
       }
     }
+  }
+})
+
+test('shared assignment is atomic, revision-aware and audited with persistent member identities', async () => {
+  const mailboxId = `test-${crypto.randomUUID()}`
+  const store = new ProjectStore(mailboxId), peer = new ProjectStore(mailboxId)
+  const cleanup = new Pool({ connectionString: process.env.DATABASE_URL ?? 'postgresql://mailer_demo:mailer_demo@127.0.0.1:55432/mailer_support' })
+  const alice = { id: 'alice', name: 'Alice Support', email: 'alice@example.test' }
+  const charlie = { id: 'charlie', name: 'Charlie Support', email: 'charlie@example.test' }
+  try {
+    await store.init(); await peer.init()
+    await store.members(alice); await store.members(charlie)
+    let states = await store.readConversationStates()
+    const targets = () => states.filter((item) => ['plans', 'quote'].includes(item.id)).map(({ id, revision }) => ({ id, revision }))
+    const initial = targets()
+    await store.updateConversations({ targets: initial, assigneeId: alice.id }, charlie)
+    states = await peer.readConversationStates()
+    assert.ok(states.filter((item) => ['plans', 'quote'].includes(item.id)).every((item) => item.assigneeId === alice.id && item.assignee === alice.name))
+    let history = await peer.activity(['plans', 'quote'])
+    assert.equal(history.length, 2)
+    assert.ok(history.every((entry) => entry.actor?.id === charlie.id && entry.data.before?.assigneeId === null))
+    const competing = await Promise.allSettled([
+      store.updateConversations({ targets: targets(), assigneeId: charlie.id }, alice),
+      peer.updateConversations({ targets: targets(), assigneeId: null }, charlie),
+    ])
+    assert.equal(competing.filter((result) => result.status === 'fulfilled').length, 1)
+    const rejected = competing.find((result) => result.status === 'rejected') as PromiseRejectedResult
+    assert.equal(rejected.reason.getStatus(), 409)
+    states = await peer.readConversationStates()
+    const before = JSON.stringify(states)
+    history = await store.activity(['plans', 'quote'])
+    await assert.rejects(store.updateConversations({ targets: [initial[0], targets()[1]], assigneeId: 'demo-emma' }, alice))
+    await assert.rejects(store.updateConversations({ targets: targets(), assigneeId: 'unknown' }, alice))
+    assert.equal(JSON.stringify(await peer.readConversationStates()), before)
+    assert.equal((await peer.activity(['plans', 'quote'])).length, history.length, 'Rejected changes must leave no audit entries')
+    const same = states.find((item) => item.id === 'plans')!
+    await store.updateConversations({ targets: [{ id: same.id, revision: same.revision }], assigneeId: same.assigneeId }, alice)
+    assert.equal((await peer.activity(['plans', 'quote'])).length, history.length, 'No-op assignments must leave no audit entries')
+    await store.updateConversations({ targets: targets(), assigneeId: null }, alice)
+    assert.ok((await peer.readConversationStates()).filter((item) => ['plans', 'quote'].includes(item.id)).every((item) => item.assigneeId === null && item.assignee === null))
+    assert.ok((await peer.members()).some((member) => member.id === alice.id && member.email === alice.email))
+    await assert.rejects(store.activity(['plans', 'plans']))
+    await assert.rejects(store.activity([]))
+    const mode = process.env.POSTFOLD_AUTH
+    try {
+      process.env.POSTFOLD_AUTH = 'keycloak'
+      assert.ok((await peer.members()).every((member) => !member.id.startsWith('demo-')), 'Switching to SSO must hide fictional demo teammates')
+      await assert.rejects(store.updateConversations({ targets: targets(), assigneeId: 'demo-emma' }, alice))
+    } finally { if (mode === undefined) delete process.env.POSTFOLD_AUTH; else process.env.POSTFOLD_AUTH = mode }
+  } finally {
+    await store.onApplicationShutdown(); await peer.onApplicationShutdown()
+    await cleanup.query('DELETE FROM demo_project_settings WHERE mailbox_id=$1', [mailboxId]); await cleanup.end()
   }
 })
 

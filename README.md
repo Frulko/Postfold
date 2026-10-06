@@ -19,6 +19,7 @@ A familiar email interface with project folders, conversation tracking and conta
 - French/English interface, IT support demo, search and automatic refresh.
 - Optional IMAP/SMTP connection, encrypted credentials and duplicate-send protection.
 - Keycloak SSO with individual sessions and client-role access control.
+- Shared teammate assignment and a conversation activity history with verified SSO authors.
 
 See the [feature gallery and technical guide](docs/guide.md) for screenshots and details.
 

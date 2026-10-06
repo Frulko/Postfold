@@ -1,7 +1,7 @@
 import 'reflect-metadata'
-import { Body, Controller, Get, Inject, Module, Optional, Patch, Put, Post, Req, Res, UseGuards, UnauthorizedException, ForbiddenException, type CanActivate, type ExecutionContext } from '@nestjs/common'
+import { Body, Controller, Get, HttpCode, Inject, Module, Optional, Patch, Put, Post, Req, Res, UseGuards, UnauthorizedException, ForbiddenException, type CanActivate, type ExecutionContext } from '@nestjs/common'
 import { NestFactory } from '@nestjs/core'
-import { demoMailbox } from './demo-mailbox.js'
+import { demoMailbox, demoMembers } from './demo-mailbox.js'
 import { ProjectStore } from './project-store.js'
 import { applyConversationStates } from '../shared/conversation-state.js'
 import { MailStore } from './mail-store.js'
@@ -41,14 +41,17 @@ class DemoController {
   constructor(@Inject(ProjectStore) private readonly projects: ProjectStore) {}
   @Get('mailbox')
   async mailbox(@Req() request: AuthRequest) {
-    const [settings, conversationStates] = await Promise.all([this.projects.read(), this.projects.readConversationStates()])
+    const [settings, conversationStates, members] = await Promise.all([this.projects.read(), this.projects.readConversationStates(), this.projects.members(request.viewer)])
     const { projects, ...projectSettings } = settings
-    return { ...demoMailbox, ...(request.viewer ? { viewer: request.viewer } : {}), projects, labels: settings.labels ?? [], projectSettings, conversationStates, conversations: applyConversationStates(demoMailbox.conversations, conversationStates) }
+    return { ...demoMailbox, ...(request.viewer ? { viewer: request.viewer } : {}), members, currentMemberId: request.viewer?.id ?? demoMembers[0].id, projects, labels: settings.labels ?? [], projectSettings, conversationStates, conversations: applyConversationStates(demoMailbox.conversations, conversationStates) }
   }
   @Put('projects')
   updateProjects(@Body() input: unknown) { return this.projects.update(input) }
   @Patch('conversations/state')
-  updateConversations(@Body() input: unknown) { return this.projects.updateConversations(input) }
+  updateConversations(@Body() input: unknown, @Req() request: AuthRequest) { return this.projects.updateConversations(input, request.viewer ?? demoMembers[0]) }
+  @Post('conversations/activity')
+  @HttpCode(200)
+  activity(@Body() ids: unknown) { return this.projects.activity(ids) }
 }
 
 @Module({})
@@ -92,11 +95,12 @@ class AuthController {
 @UseGuards(MailboxGuard)
 class MailboxController {
   constructor(@Inject(MailStore) private readonly mailbox: MailStore) {}
-  @Get() async read(@Req() request: AuthRequest) { return { ...await this.mailbox.mailbox(), ...(request.viewer ? { viewer: request.viewer } : {}) } }
-  @Post('sync') async sync(@Req() request: AuthRequest) { return { ...await this.mailbox.sync(), ...(request.viewer ? { viewer: request.viewer } : {}) } }
+  @Get() async read(@Req() request: AuthRequest) { const [mailbox, members] = await Promise.all([this.mailbox.mailbox(), this.mailbox.members(request.viewer)]); return { ...mailbox, members, currentMemberId: request.viewer?.id, ...(request.viewer ? { viewer: request.viewer } : {}) } }
+  @Post('sync') async sync(@Req() request: AuthRequest) { const [mailbox, members] = await Promise.all([this.mailbox.sync(), this.mailbox.members(request.viewer)]); return { ...mailbox, members, currentMemberId: request.viewer?.id, ...(request.viewer ? { viewer: request.viewer } : {}) } }
   @Put('projects') projects(@Body() input: unknown) { return this.mailbox.update(input) }
-  @Patch('conversations/state') conversations(@Body() input: unknown) { return this.mailbox.updateConversations(input) }
-  @Post('reply') reply(@Body() input: unknown) { return this.mailbox.reply(input) }
+  @Patch('conversations/state') conversations(@Body() input: unknown, @Req() request: AuthRequest) { return this.mailbox.updateConversations(input, request.viewer) }
+  @Post('conversations/activity') @HttpCode(200) activity(@Body() ids: unknown) { return this.mailbox.activity(ids) }
+  @Post('reply') reply(@Body() input: unknown, @Req() request: AuthRequest) { return this.mailbox.reply(input, request.viewer) }
 }
 
 export async function createApp(demoMode = false, mailboxId = 'support-demo', liveMode = false) {

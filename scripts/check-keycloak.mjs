@@ -25,7 +25,7 @@ const container = `postfold-sso-${identifier}`
 const database = process.env.DATABASE_URL ?? 'postgresql://mailer_demo:mailer_demo@127.0.0.1:55432/mailer_support'
 const pool = new Pool({ connectionString: database })
 const sessionIds = []
-const sessions = [`postfold-sso-${identifier}`, `postfold-denied-${identifier}`]
+const sessions = [`postfold-sso-${identifier}`, `postfold-denied-${identifier}`, `postfold-teammate-${identifier}`]
 const command = (name, args) => execFileSync(name, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
 const browser = async (session, ...args) => (await promisify(execFile)('agent-browser', ['--session', session, ...args], { encoding: 'utf8' })).stdout.trim()
 const digest = (value) => createHash('sha256').update(value).digest('hex')
@@ -45,9 +45,9 @@ try {
       attributes: { 'pkce.code.challenge.method': 'S256', 'post.logout.redirect.uris': publicOrigin + '/auth/logged-out' },
       protocolMappers: [{ name: 'postfold-audience', protocol: 'openid-connect', protocolMapper: 'oidc-audience-mapper', config: { 'included.client.audience': 'postfold', 'access.token.claim': 'true', 'id.token.claim': 'false' } }],
     }],
-    users: ['alice', 'bob'].map((username) => ({ username, enabled: true, email: username + '@postfold.test', emailVerified: true,
-      firstName: username === 'alice' ? 'Alice' : 'Bob', lastName: 'Support', credentials: [{ type: 'password', value: 'test-only-user-password', temporary: false }],
-      clientRoles: username === 'alice' ? { postfold: ['support'] } : {},
+    users: ['alice', 'bob', 'charlie'].map((username) => ({ username, enabled: true, email: username + '@postfold.test', emailVerified: true,
+      firstName: username[0].toUpperCase() + username.slice(1), lastName: 'Support', credentials: [{ type: 'password', value: 'test-only-user-password', temporary: false }],
+      clientRoles: username !== 'bob' ? { postfold: ['support'] } : {},
     })),
   }))
   Object.assign(process.env, { DATABASE_URL: database, POSTFOLD_AUTH: 'keycloak', POSTFOLD_ORIGIN: publicOrigin, KEYCLOAK_ISSUER: issuer,
@@ -136,9 +136,62 @@ try {
   assert.equal((await change('https://attacker.invalid')).status, 403)
   assert.equal((await change()).status, 403)
   assert.equal((await change(publicOrigin)).status, 200)
+  await signIn(sessions[2], 'charlie')
+  await browser(sessions[2], 'wait', '--text', 'Charlie Support')
+  await browser(sessions[2], 'state', 'save', statePath)
+  const teammateCookie = JSON.parse(readFileSync(statePath, 'utf8')).cookies.find((item) => item.name === 'postfold-session')
+  const teammateHeaders = { Cookie: 'postfold-session=' + teammateCookie.value }
+  sessionIds.push(digest(teammateCookie.value))
+  let shared = await (await fetch(origin + '/demo/mailbox', { headers })).json()
+  assert.equal(shared.currentMemberId, viewer.id)
+  assert.equal(shared.members.length, 2, 'Only authorized users who visited the mailbox appear in its directory')
+  const colleague = shared.members.find((member) => member.name === 'Charlie Support')
+  const selectedId = shared.conversations[0].id
+  const assign = (body, credentials = headers) => fetch(origin + '/demo/conversations/state', { method: 'PATCH', headers: { ...credentials, Origin: publicOrigin, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  const target = () => ({ id: selectedId, revision: shared.conversationStates.find((state) => state.id === selectedId).revision })
+  assert.equal((await assign({ targets: [target()], assigneeId: colleague.id, actor: { id: colleague.id, name: colleague.name } })).status, 400)
+  assert.equal((await assign({ targets: [target()], assigneeId: 'unknown' })).status, 400)
+  assert.equal((await assign({ targets: [target()], assigneeId: colleague.id })).status, 200)
+  shared = await (await fetch(origin + '/demo/mailbox', { headers })).json()
+  const race = await Promise.all([assign({ targets: [target()], assigneeId: viewer.id }), assign({ targets: [target()], assigneeId: null }, teammateHeaders)])
+  assert.deepEqual(race.map((response) => response.status).sort(), [200,409])
+  const activity = await (await fetch(origin + '/demo/conversations/activity', { method: 'POST', headers: { ...headers, Origin: publicOrigin, 'Content-Type': 'application/json' }, body: JSON.stringify([selectedId]) })).json()
+  const assigned = activity.find((entry) => entry.data.after?.assigneeId === colleague.id)
+  assert.equal(assigned.actor.id, viewer.id, 'Assignment author comes from the verified session, independently of the assignee')
   await browser(sessions[0], 'find', 'role', 'button', 'click', '--name', 'Refresh', '--exact')
   await browser(sessions[0], 'wait', '--text', 'Alice Support')
   assert.ok((await browser(sessions[0], 'snapshot', '-i')).includes('Sign out'))
+  await browser(sessions[0], 'click', 'summary[aria-label="Assignment"]')
+  await browser(sessions[0], 'snapshot', '-i')
+  await browser(sessions[0], 'find', 'role', 'button', 'click', '--name', 'Assign to me', '--exact')
+  await browser(sessions[0], 'wait', '--fn', 'document.querySelector(\'summary[aria-label="Assignment"]\').textContent.includes("Alice Support")')
+  await browser(sessions[0], 'find', 'text', 'Activity history', 'click', '--exact')
+  await browser(sessions[0], 'wait', '--text', 'Assigned to Alice Support')
+  if (process.env.ASSIGNMENT_TEST_SCREENSHOT) { await browser(sessions[0], 'set', 'viewport', '1440', '1200'); await browser(sessions[0], 'screenshot', process.env.ASSIGNMENT_TEST_SCREENSHOT) }
+  await browser(sessions[0], 'check', `[data-conversation-id="${selectedId}"] input[type=checkbox]`)
+  await browser(sessions[0], 'check', '[data-conversation-id="quote"] input[type=checkbox]')
+  await browser(sessions[0], 'find', 'role', 'button', 'click', '--name', 'Actions', '--exact')
+  await browser(sessions[0], 'wait', '--text', 'Mixed assignment')
+  await browser(sessions[0], 'click', '.bulk-actions summary[aria-label="Assignment"]')
+  await browser(sessions[0], 'snapshot', '-i')
+  await browser(sessions[0], 'find', 'role', 'searchbox', 'fill', 'charlie', '--name', 'Search teammates', '--exact')
+  await browser(sessions[0], 'click', '.bulk-actions .assignment-popup button[title="charlie@postfold.test"]')
+  await browser(sessions[0], 'wait', '--fn', 'document.querySelector(\'.bulk-actions summary[aria-label="Assignment"]\').textContent.includes("Charlie Support")')
+  shared = await (await fetch(origin + '/demo/mailbox', { headers })).json()
+  assert.ok(shared.conversations.filter((item) => [selectedId,'quote'].includes(item.id)).every((item) => item.assigneeId === colleague.id))
+  await browser(sessions[0], 'click', '.bulk-actions summary[aria-label="Assignment"]')
+  await browser(sessions[0], 'find', 'role', 'button', 'click', '--name', 'Remove assignment', '--exact')
+  await browser(sessions[0], 'wait', '--fn', 'document.querySelector(\'.bulk-actions summary[aria-label="Assignment"]\').textContent.includes("Unassigned")')
+  shared = await (await fetch(origin + '/demo/mailbox', { headers })).json()
+  assert.ok(shared.conversations.filter((item) => [selectedId,'quote'].includes(item.id)).every((item) => item.assigneeId === null))
+  await browser(sessions[0], 'find', 'role', 'button', 'click', '--name', 'Clear selection', '--exact')
+  await browser(sessions[0], 'set', 'viewport', '390', '900')
+  await browser(sessions[0], 'click', 'summary[aria-label="Assignment"]')
+  const mobile = JSON.parse(await browser(sessions[0], 'eval', 'JSON.stringify((()=>{const box=document.querySelector(".assignment-popup").getBoundingClientRect();return {left:box.left,right:box.right,width:innerWidth,documentWidth:document.documentElement.scrollWidth}})())'))
+  const bounds = typeof mobile === 'string' ? JSON.parse(mobile) : mobile
+  assert.ok(bounds.left >= 0 && bounds.right <= bounds.width && bounds.documentWidth <= bounds.width, 'Mobile assignment popup must stay inside the viewport')
+  await browser(sessions[0], 'press', 'Escape')
+  await browser(sessions[0], 'set', 'viewport', '1440', '1040')
   if (process.env.KEYCLOAK_TEST_SCREENSHOT) await browser(sessions[0], 'screenshot', process.env.KEYCLOAK_TEST_SCREENSHOT)
   await signIn(sessions[1], 'bob')
   await browser(sessions[1], 'wait', '--text', 'does not have access')
@@ -150,7 +203,7 @@ try {
   await browser(sessions[0], 'wait', '--url', '**/auth/logged-out')
   assert.equal((await fetch(origin + '/auth/me', { headers })).status, 401)
   assert.equal((await fetch((await peer.getUrl()) + '/auth/me', { headers })).status, 401)
-  console.info('PASS: real Keycloak code flow/PKCE, state replay protection, encrypted server sessions, HttpOnly cookies, role guards, SSR/server functions, concurrent refresh across instances, CSRF rejection and SSO logout')
+  console.info('PASS: real Keycloak code flow/PKCE, state protection, encrypted sessions, role guards, concurrent refresh, CSRF, trusted assignment/audit authors, competing assignments, assignment UI, activity and SSO logout')
 } catch (error) {
   console.error(error)
   if (app) console.error('Browser failure page:', (await browser(sessions[0], 'get', 'text', 'body').catch(() => '')).slice(0,1500))

@@ -9,7 +9,7 @@ import { loadAccount } from './mail-secrets.js'
 import { isMailAddress, isReplyRequest, type MailAccount } from '../shared/mail-account.js'
 import { isConversationUpdate, applyConversationStates } from '../shared/conversation-state.js'
 import { isProjectSettings } from '../shared/projects.js'
-import type { Conversation, ConversationUpdate, DemoMailbox, Project } from '../shared/mailbox.js'
+import type { Conversation, ConversationUpdate, DemoMailbox, Member, Project } from '../shared/mailbox.js'
 
 type CachedMessage = { id: string; path: string; validity: string; uid: number; raw_id: string | null; data: Conversation & { replyTo?: string; references?: string[]; receivedAt?: string } }
 type Folder = { id: string; path: string }
@@ -245,17 +245,21 @@ export class MailStore extends ProjectStore {
         await transaction.query(`INSERT INTO mail_messages (mailbox_id, id, path, validity, uid, raw_id, data) VALUES ($1,$2,$3,$4,$5,$6,$7)
           ON CONFLICT (mailbox_id,id) DO UPDATE SET path=EXCLUDED.path, validity=EXCLUDED.validity, uid=EXCLUDED.uid, raw_id=EXCLUDED.raw_id, data=EXCLUDED.data`,
         [this.mailboxId, row.id, row.path, row.validity, row.uid, row.raw_id, row.data])
-        await transaction.query(`INSERT INTO demo_conversation_state (mailbox_id,id,unread,status,project_id,label_ids) VALUES ($1,$2,$3,$5,$4,ARRAY[]::text[])
+        await transaction.query(`INSERT INTO demo_conversation_state (mailbox_id,id,unread,status,project_id,label_ids,assignee_id) VALUES ($1,$2,$3,$5,$4,ARRAY[]::text[],
+          (SELECT s.assignee_id FROM demo_conversation_state s JOIN mail_messages m ON m.mailbox_id=s.mailbox_id AND m.id=s.id
+            WHERE s.mailbox_id=$1 AND s.id<>$2 AND m.data->>'threadId'=$6 ORDER BY COALESCE(m.data->>'receivedAt',m.data->>'sentAt') DESC,m.uid DESC LIMIT 1))
           ON CONFLICT (mailbox_id,id) DO UPDATE SET unread=EXCLUDED.unread, project_id=EXCLUDED.project_id,
           revision=demo_conversation_state.revision + CASE WHEN demo_conversation_state.unread IS DISTINCT FROM EXCLUDED.unread OR demo_conversation_state.project_id IS DISTINCT FROM EXCLUDED.project_id THEN 1 ELSE 0 END`,
-        [this.mailboxId, row.id, row.data.unread, row.data.projectId, row.data.status])
+        [this.mailboxId, row.id, row.data.unread, row.data.projectId, row.data.status, row.data.threadId])
       }
       await transaction.query('COMMIT')
     } catch (error) { await transaction.query('ROLLBACK'); throw error } finally { transaction.release() }
   }
 
-  override async updateConversations(input: unknown) {
+  override async updateConversations(input: unknown, actor?: Member) {
     if (!isConversationUpdate(input)) throw new BadRequestException('Invalid conversation update.')
+    if (actor) await this.members(actor)
+    await this.checkAssignee(input)
     return this.exclusive(async () => {
       const states = await this.readConversationStates()
       const settings = await this.read()
@@ -265,7 +269,7 @@ export class MailStore extends ProjectStore {
       if ([...(input.addLabelIds ?? []), ...(input.removeLabelIds ?? [])].some((id) => !settings.labels?.some((label) => label.id === id))) throw new BadRequestException('Unknown label.')
       if (input.projectId && !settings.projects.some((item) => item.id === input.projectId)) throw new BadRequestException('Unknown destination folder.')
       if (input.unread !== undefined || input.projectId !== undefined) await this.applyImapUpdate(input)
-      return super.updateConversations(input)
+      return super.updateConversations(input, actor)
     })
   }
 
@@ -350,7 +354,7 @@ export class MailStore extends ProjectStore {
     })
   }
 
-  async reply(input: unknown) {
+  async reply(input: unknown, actor?: Member) {
     if (!isReplyRequest(input)) throw new BadRequestException('Invalid reply.')
     return this.exclusive(async () => {
       const digest = hash(JSON.stringify([input.id, input.text]))
@@ -390,18 +394,25 @@ export class MailStore extends ProjectStore {
         disableFileAccess: true, disableUrlAccess: true,
       })
       const raw = generated.message as Buffer
-      await this.pool.query(`INSERT INTO mail_sends (mailbox_id,request_id,target_id,reply_key,body_hash,status,data) VALUES ($1,$2,$3,$4,$5,'sending',$6)`,
-        [this.mailboxId, input.requestId, input.id, `${message.threadId}:${message.messageId ?? input.id}`, digest, outgoing])
+      // The send reservation and its trusted author must be durable before SMTP begins.
+      await this.pool.query(`WITH reserved AS (
+        INSERT INTO mail_sends (mailbox_id,request_id,target_id,reply_key,body_hash,status,data) VALUES ($1,$2,$3,$4,$5,'sending',$6) RETURNING request_id
+      ) INSERT INTO postfold_activity (mailbox_id,id,conversation_id,actor,kind,data)
+        SELECT $1,request_id,$3,$7::jsonb,'reply','{"status":"sending"}'::jsonb FROM reserved`,
+        [this.mailboxId, input.requestId, input.id, `${message.threadId}:${message.messageId ?? input.id}`, digest, outgoing, actor ? JSON.stringify({ id: actor.id, name: actor.name }) : null])
       try {
         const delivered = await transport.sendMail({ envelope: { from: this.account.email, to: [message.replyTo] }, raw })
         if (!delivered.accepted?.length) throw new Error('No recipient accepted')
       } catch {
-        await this.pool.query("UPDATE mail_sends SET status='uncertain' WHERE mailbox_id=$1 AND request_id=$2", [this.mailboxId, input.requestId])
+        await this.pool.query(`WITH delivery AS (UPDATE mail_sends SET status='uncertain' WHERE mailbox_id=$1 AND request_id=$2 RETURNING request_id)
+          UPDATE postfold_activity SET data=jsonb_set(data,'{status}','"uncertain"') WHERE mailbox_id=$1 AND id IN (SELECT request_id FROM delivery)`, [this.mailboxId, input.requestId])
         throw new ConflictException('Delivery could not be confirmed. Do not resend; inspect Sent and the mail server. Your draft is preserved.')
       }
-      await this.pool.query("UPDATE mail_sends SET status='sent' WHERE mailbox_id=$1 AND request_id=$2", [this.mailboxId, input.requestId])
+      await this.pool.query(`WITH delivery AS (UPDATE mail_sends SET status='sent' WHERE mailbox_id=$1 AND request_id=$2 RETURNING request_id)
+        UPDATE postfold_activity SET data=jsonb_set(data,'{status}','"sent"') WHERE mailbox_id=$1 AND id IN (SELECT request_id FROM delivery)`, [this.mailboxId, input.requestId])
       await this.pool.query("UPDATE demo_conversation_state SET status='waiting', revision=revision+1 WHERE mailbox_id=$1 AND id=$2 AND status<>'waiting'", [this.mailboxId, input.id])
-      await this.pool.query(`INSERT INTO demo_conversation_state (mailbox_id,id,unread,status,project_id,label_ids) VALUES ($1,$2,false,'waiting',$3,ARRAY[]::text[]) ON CONFLICT DO NOTHING`, [this.mailboxId, outgoing.id, message.projectId])
+      await this.pool.query(`INSERT INTO demo_conversation_state (mailbox_id,id,unread,status,project_id,label_ids,assignee_id)
+        SELECT $1,$2,false,'waiting',$3,ARRAY[]::text[],assignee_id FROM demo_conversation_state WHERE mailbox_id=$1 AND id=$4 ON CONFLICT DO NOTHING`, [this.mailboxId, outgoing.id, message.projectId, input.id])
       let sentCopy = !this.account.saveSent
       if (this.account.saveSent) {
         const client = this.imap()

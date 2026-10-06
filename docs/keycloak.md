@@ -107,7 +107,7 @@ Opening Postfold now redirects to Keycloak. After login, the header displays the
 - Mutations require the configured frontend origin. TanStack server functions also use the framework's CSRF middleware. Login callbacks use state/nonce/PKCE rather than an Origin check because they return from the identity provider.
 - Shared mailbox metadata remains shared. Local drafts and notes are separated by mailbox and Keycloak user ID. Existing Basic-mode local drafts are not automatically assigned to an SSO user.
 
-All users with the configured role have the existing mailbox actions. Per-action roles, audit attribution, team presence and multi-mailbox permissions are future work. Keycloak authentication does not enable OAuth authentication to an IMAP/SMTP provider.
+All users with the configured role have the existing mailbox actions. Shared assignment and recorded conversation changes/send attempts use verified session identities; see [assignment and activity](guide.md#assignment-and-activity). The mailbox directory lists authorized users who have opened this instance, without reading the Keycloak admin API. It is not a live role directory: revoking a role blocks access through token verification/refresh but does not remove an existing assignment or directory entry. Per-action roles, team presence and multi-mailbox permissions are future work. Keycloak authentication does not enable OAuth authentication to an IMAP/SMTP provider.
 
 ## Local verification
 
@@ -119,4 +119,4 @@ With Docker, the local PostgreSQL service and `agent-browser` installed:
 pnpm test:sso
 ```
 
-The check builds Postfold, starts an isolated Keycloak 26.5.2 realm with fictional users and drives the compiled frontend in Chromium. It verifies login, PKCE/state protection, role denial, encrypted sessions, cookies, frontend/server-function access, concurrent token refresh across two API instances, origin rejection and logout. Its containers, temporary secrets and test mailbox/session records are removed afterward.
+The check builds Postfold, starts an isolated Keycloak 26.5.2 realm with fictional users and drives the compiled frontend in Chromium. It verifies login, PKCE/state protection, role denial, encrypted sessions, cookies, frontend/server-function access, concurrent token refresh across two API instances, origin rejection, competing assignments, trusted audit authors, the assignment/activity UI and logout. Its containers, temporary secrets and test mailbox/session records are removed afterward.

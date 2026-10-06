@@ -85,6 +85,11 @@ try {
   assert.equal(received.body.trim(), 'Please help with my VPN.')
   assert.equal(received.unread, true)
   const state = () => mailbox.conversationStates.find((item) => item.id === received.id)
+  const supportActor = { id: 'test-alice', name: 'Alice Support', email: 'alice@example.test' }
+  await store.members(supportActor)
+  await store.updateConversations({ targets: [{ id: received.id, revision: state().revision }], assigneeId: supportActor.id }, supportActor)
+  mailbox = await store.sync()
+  assert.equal(mailbox.conversations[0].assigneeId, supportActor.id)
   await store.updateConversations({ targets: [{ id: received.id, revision: state().revision }], unread: false })
   mailbox = await store.sync()
   assert.equal(mailbox.conversations[0].unread, false)
@@ -118,6 +123,7 @@ try {
     assert.equal(moved.id, received.id)
     assert.equal(moved.projectId, 'vpn')
     assert.deepEqual(moved.labelIds, ['urgent'])
+    assert.equal(moved.assigneeId, supportActor.id, 'Native moves and synchronization must preserve shared assignment')
     const lock = await native.getMailboxLock(destinationPath)
     try {
       const fetched = await native.fetchAll('1:*', { flags: true })
@@ -155,7 +161,7 @@ try {
   peer = new MailStore(accountId)
   await peer.init()
   const reply = { id: received.id, revision: state().revision, text: 'VPN access has been restored.', requestId: randomUUID() }
-  const outcomes = await Promise.allSettled([store.reply(reply), peer.reply({ ...reply, requestId: randomUUID() })])
+  const outcomes = await Promise.allSettled([store.reply(reply, supportActor), peer.reply({ ...reply, requestId: randomUUID() }, supportActor)])
   assert.equal(outcomes.filter((item) => item.status === 'fulfilled').length, 1)
   assert.equal(outcomes.filter((item) => item.status === 'rejected').length, 1)
   const accepted = outcomes[0].status === 'fulfilled' ? reply : null
@@ -166,6 +172,14 @@ try {
   assert.equal(mailbox.deliveries[0].status, 'sent')
   assert.equal(mailbox.deliveries[0].sentCopy, true)
   assert.equal(mailbox.conversations.filter((item) => item.outgoing).length, 1)
+  const sentActivity = (await store.activity([received.id])).filter((entry) => entry.kind === 'reply')
+  assert.equal(sentActivity.length, 1, 'Retries and duplicate replies must not create additional send activity')
+  assert.equal(sentActivity[0].actor.id, supportActor.id)
+  assert.equal(sentActivity[0].data.status, 'sent')
+  assert.equal(mailbox.conversations.find((item) => item.outgoing).assigneeId, supportActor.id)
+  await smtp.sendMail({ from: 'customer@postfold.test', to: account.email, subject: 'Re: VPN access request', text: 'Thanks, I have another question.', messageId: `<${randomUUID()}@postfold.test>`, inReplyTo: originalId, references: [originalId] })
+  mailbox = await store.sync()
+  assert.equal(mailbox.conversations.find((item) => item.body.includes('another question')).assigneeId, supportActor.id, 'New messages in an existing thread must inherit assignment')
   const recipient = new ImapFlow({ host: 'localhost', port: imapPort, secure: true, auth: { user: 'customer', pass: 'test-only-customer-password' }, tls, logger: false })
   recipient.on('error', () => {})
   try {
@@ -182,11 +196,15 @@ try {
     const transport = originalSmtp()
     return { verify: () => transport.verify(), sendMail: async (...args) => { await transport.sendMail(...args); throw new Error('Injected loss of SMTP acknowledgement after acceptance') } }
   }
-  await assert.rejects(store.reply(uncertainReply))
+  await assert.rejects(store.reply(uncertainReply, supportActor))
   store.smtp = originalSmtp
   await assert.rejects(peer.reply(uncertainReply))
   await assert.rejects(peer.reply({ ...uncertainReply, requestId: randomUUID() }))
   assert.equal((await peer.mailbox()).deliveries.find((item) => item.targetId === uncertainTarget.id).status, 'uncertain')
+  const uncertainActivity = (await peer.activity([uncertainTarget.id])).filter((entry) => entry.kind === 'reply')
+  assert.equal(uncertainActivity.length, 1)
+  assert.equal(uncertainActivity[0].actor.id, supportActor.id)
+  assert.equal(uncertainActivity[0].data.status, 'uncertain')
   console.info('Lost SMTP acknowledgement persists uncertainty and blocks retries across instances: passed')
   const nativeTargetId = `<${randomUUID()}@postfold.test>`
   await smtp.sendMail({ from: 'customer@postfold.test', to: account.email, subject: 'Email client setup', text: 'Please configure my email client.', messageId: nativeTargetId })

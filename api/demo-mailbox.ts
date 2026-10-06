@@ -1,5 +1,11 @@
 import type { Mailbox } from '../shared/mailbox.js'
 
+export const demoMembers = [
+  { id: 'demo-julie', name: 'Julie Dumoulin', email: 'julie@example.test', provider: 'demo' as const },
+  { id: 'demo-marc', name: 'Marc Laurent', email: 'marc@example.test', provider: 'demo' as const },
+  { id: 'demo-emma', name: 'Emma Moreau', email: 'emma@example.test', provider: 'demo' as const },
+]
+
 // Fictional IT support requests; no IMAP or SMTP connection.
 export const demoMailbox: Mailbox = {
   projects: [
