@@ -201,7 +201,7 @@ try {
   assert.equal((await pool.query('SELECT 1 FROM postfold_sessions WHERE id=$1', [id])).rowCount, 1)
   assert.equal((await fetch(origin + '/auth/logout', { method: 'POST', headers: { ...headers, Origin: 'https://attacker.invalid' }, redirect: 'manual' })).status, 403)
   await browser(sessions[0], 'find', 'role', 'button', 'click', '--name', 'Sign out', '--exact')
-  await browser(sessions[0], 'snapshot', '-i')
+  await browser(sessions[0], 'wait', '--fn', 'location.pathname === "/auth/logged-out" || [...document.querySelectorAll("button, input[type=submit]")].some(element => (element.textContent || element.value || "").trim() === "Logout")')
   if (!(await browser(sessions[0], 'get', 'url')).includes('/auth/logged-out')) await browser(sessions[0], 'find', 'role', 'button', 'click', '--name', 'Logout', '--exact')
   await browser(sessions[0], 'wait', '--url', '**/auth/logged-out')
   assert.equal((await fetch(origin + '/auth/me', { headers })).status, 401)
