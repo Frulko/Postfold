@@ -19,6 +19,8 @@ jobs:
     name: Typecheck, integration tests and build
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    env:
+      AGENT_BROWSER_EXECUTABLE_PATH: /usr/bin/google-chrome
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@d9184bf108216479bc5a137cc391f4d7b14c870b # v6.1.0
@@ -33,7 +35,7 @@ jobs:
       - name: Install integration browser
         run: |
           npm install --global agent-browser@0.33.2
-          agent-browser install --with-deps
+          test -x "$AGENT_BROWSER_EXECUTABLE_PATH"
       - name: Real IMAP and SMTP integration
         run: node scripts/check-live-mail.mjs
         env:
