@@ -1,6 +1,6 @@
 # Connect an IMAP/SMTP mailbox
 
-Postfold can connect **one shared mailbox per instance** using password authentication, including provider-issued app passwords. Credentials are imported on the server and encrypted in PostgreSQL. The frontend and API require the same application access credentials in live mode. SSO, per-user mailbox roles and OAuth mail-provider authentication are not implemented yet.
+Postfold can connect **one shared mailbox per instance** using password authentication, including provider-issued app passwords. Credentials are imported on the server and encrypted in PostgreSQL. This guide uses shared Basic access; enable [Keycloak SSO](keycloak.md) for individual sessions and client-role authorization. OAuth mail-provider authentication is not implemented yet.
 
 Use this guide after building Postfold and preparing PostgreSQL as described in [self-hosting](self-hosting.md). Try a dedicated test mailbox before switching the team to a support mailbox.
 

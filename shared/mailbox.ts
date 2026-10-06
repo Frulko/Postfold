@@ -33,4 +33,4 @@ export type ProjectSettings = {
 export type ConversationState = Pick<Conversation, 'id' | 'unread' | 'status'> & { revision: number; projectId?: string; labelIds?: string[] }
 export type ConversationPatch = Partial<Pick<Conversation, 'unread' | 'status' | 'projectId'>> & { addLabelIds?: string[]; removeLabelIds?: string[] }
 export type ConversationUpdate = ConversationPatch & { targets: { id: string; revision: number }[] }
-export type DemoMailbox = Mailbox & { projectSettings: Omit<ProjectSettings, 'projects'>; conversationStates: ConversationState[]; connection?: { mode: 'imap'; email: string; lastSync: string | null; error: boolean; maxMessagesPerSync: number }; deliveries?: { targetId: string; status: 'sending' | 'sent' | 'uncertain'; sentCopy: boolean }[] }
+export type DemoMailbox = Mailbox & { viewer?: import('./auth.js').Viewer; projectSettings: Omit<ProjectSettings, 'projects'>; conversationStates: ConversationState[]; connection?: { mode: 'imap'; email: string; lastSync: string | null; error: boolean; maxMessagesPerSync: number }; deliveries?: { targetId: string; status: 'sending' | 'sent' | 'uncertain'; sentCopy: boolean }[] }

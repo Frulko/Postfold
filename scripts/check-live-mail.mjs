@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync, execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomBytes, randomUUID, scryptSync } from 'node:crypto'
@@ -54,6 +54,9 @@ try {
   const accessBefore = (await import('node:fs')).readFileSync(setupAccess, 'utf8')
   execFileSync(process.execPath, ['api/dist/api/configure-mailbox.js'], { env: { ...process.env, POSTFOLD_ACCESS_FILE: setupAccess }, encoding: 'utf8', input: JSON.stringify({ account }) })
   assert.equal((await import('node:fs')).readFileSync(setupAccess, 'utf8'), accessBefore)
+  const unusedAccess = join(directory, 'sso-access.json')
+  execFileSync(process.execPath, ['api/dist/api/configure-mailbox.js'], { env: { ...process.env, POSTFOLD_AUTH: 'keycloak', POSTFOLD_ACCESS_FILE: unusedAccess }, encoding: 'utf8', input: JSON.stringify({ account }) })
+  assert.equal(existsSync(unusedAccess), false, 'SSO mailbox bootstrap must not create or require shared Basic credentials')
   const encrypted = (await pool.query('SELECT secret FROM mail_accounts WHERE id=$1', [accountId])).rows[0].secret
   assert.ok(!JSON.stringify(encrypted).includes('test-only-mail-password'))
   const tls = { ca: (await import('node:fs')).readFileSync(join(directory, 'ca.pem')), rejectUnauthorized: true }

@@ -1,6 +1,6 @@
 # Feature screenshots
 
-These PNGs are captured from the running Postfold application, not generated mockups. All messages and contacts are fictional. Captures use the English interface and IT support requests (VPN, MFA, onboarding and backups). `live-mailbox.png` uses real TLS-enabled IMAP/SMTP against an isolated GreenMail test server; other captures show demo mode with simulated presence.
+These PNGs are captured from the running Postfold application, not generated mockups. All messages and contacts are fictional. Captures use the English interface and IT support requests (VPN, MFA, onboarding and backups). `live-mailbox.png` uses real TLS-enabled IMAP/SMTP against an isolated GreenMail test server. `keycloak-session.png` uses a real isolated Keycloak realm and an individually authenticated demo user, with simulated presence hidden. Other captures show demo mode with simulated presence.
 
 | File | Highlight | Capture size |
 | --- | --- | --- |
@@ -15,11 +15,14 @@ These PNGs are captured from the running Postfold application, not generated moc
 | `contacts-and-notes.png` | Contact history, project links and a local note | 1440 × 1040 |
 | `draft-composer.png` | Saved local draft and disabled Send control | 1440 × 1040 |
 | `live-mailbox.png` | Authenticated IMAP inbox, native folders and enabled SMTP reply | 1440 × 1040 |
+| `keycloak-session.png` | Individual Keycloak identity, shared demo inbox and Sign out | 1440 × 1040 |
 | `mobile-inbox.png` | Narrow layout and stable batch selection toolbar | 390 × 900 |
 
 ## Refreshing captures
 
 For the connected mailbox, run `pnpm build`, then `MAIL_TEST_WEB=true MAIL_TEST_BROWSER=true MAIL_TEST_SCREENSHOT="$PWD/docs/screenshots/live-mailbox.png" pnpm test:mail`. The integration check creates and removes its own mail server and test data and sends only to fictional local recipients.
+
+For SSO, run `KEYCLOAK_TEST_SCREENSHOT="$PWD/docs/screenshots/keycloak-session.png" pnpm test:sso`. The check logs in a fictional support user and removes its isolated realm, sessions and test mailbox afterward.
 
 Start `pnpm dev`, then use a fresh isolated browser session with `agent-browser`. Open `http://127.0.0.1:3002/?lang=en`. Set the viewport to the size above, navigate through the real UI and save screenshots under this directory. Keep the demo banner visible and include the relevant controls.
 

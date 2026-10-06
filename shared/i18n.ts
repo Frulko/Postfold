@@ -151,6 +151,7 @@ const english: Record<string, string> = {
   "Note enregistrée dans ce navigateur.": "Note saved in this browser.",
   "Notes internes": "Internal notes",
   "Note locale": "Local note",
+  "Se déconnecter": "Sign out",
   "Personnalisée": "Custom",
   "Position": "Position",
   "Position dans l’ordre manuel": "Position in manual order",

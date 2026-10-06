@@ -42,7 +42,7 @@ function MailboxPage() {
   const { t, locale } = useI18n()
   const navigate = Route.useNavigate()
   const initialMailbox = Route.useLoaderData()
-  const storageKey = initialMailbox.connection ? `postfold:mailbox:${initialMailbox.connection.email}:v1` : 'mailer-support:demo:v1'
+  const storageKey = initialMailbox.viewer ? `postfold:mailbox:${initialMailbox.connection?.email ?? 'demo'}:${initialMailbox.viewer.id}:v1` : initialMailbox.connection ? `postfold:mailbox:${initialMailbox.connection.email}:v1` : 'mailer-support:demo:v1'
   const latestStates = useRef(initialMailbox.conversationStates)
   const stateQueue = useRef(Promise.resolve())
   const stateJobs = useRef(0)
@@ -377,7 +377,7 @@ function MailboxPage() {
           onMailDrop={(event, id) => { if (!dragSession.current.length) return; event.preventDefault(); move(dragSession.current, id); finishDrag() }} />
         <LabelManager labels={mailbox.labels ?? []} conversations={mailbox.conversations} revision={folderSettings.revision} disabled={folderBusy} selectedId={activeLabel} onSelect={(id) => { setLabelId(id); setView('mail'); clearSelection() }} onSave={async (labels, revision) => { const failure = await commitFolders({ ...folderSettings, labels, revision }); if (!failure) await refreshMailbox(); return failure }} />
         {folderFeedback ? <p className={`folder-feedback ${folderFailed ? 'failed' : ''}`} role={folderFailed ? 'alert' : 'status'}>{folderFeedback}</p> : null}
-        <div className="sidebar-bottom"><span className="user-avatar">{mailbox.connection ? 'PF' : 'JD'}</span><div>{t(mailbox.connection ? "Boîte partagée" : "Julie · Démo")}<small>{t("Votre espace de travail")}</small></div></div>
+        <div className="sidebar-bottom"><span className="user-avatar">{mailbox.viewer ? initials(mailbox.viewer.name) : mailbox.connection ? 'PF' : 'JD'}</span><div>{mailbox.viewer?.name ?? t(mailbox.connection ? "Boîte partagée" : "Julie · Démo")}<small>{mailbox.viewer ? 'Keycloak SSO' : t("Votre espace de travail")}</small></div></div>
       </aside>
 
       <main className="main">
@@ -386,7 +386,8 @@ function MailboxPage() {
           <div className="header-indicators">
             <select className="language-switch" aria-label={t("Langue")} value={locale} onChange={(event) => { setConversationFeedback(''); setFolderFeedback(''); setNotice(''); void navigate({ search: { lang: event.target.value === 'en' ? 'en' : 'fr' }, replace: true }) }}><option value="fr">FR</option><option value="en">EN</option></select>
             <MailboxRefresh onRefresh={refreshMailbox} connected={!!mailbox.connection} />
-            {!mailbox.connection ? <div className="presence-group">
+            {mailbox.viewer ? <><span className="identity-badge" title={mailbox.viewer.email}><span className="user-avatar">{initials(mailbox.viewer.name)}</span><span>{mailbox.viewer.name}</span></span><form action="/auth/logout" method="post" onSubmit={(event) => { if (!preserveDraft()) event.preventDefault() }}><button className="secondary-button" type="submit">{t("Se déconnecter")}</button></form></> : null}
+            {!mailbox.connection && !mailbox.viewer ? <div className="presence-group">
               <ul className="presence-list" aria-label={t("Présences de démonstration")}>
                 {demoPresence.map((person) => <li className="presence-item" key={person.name}>
                   <span className={`presence-avatar ${person.state}`} role="img" tabIndex={0} aria-label={t("{0} : {1}, présence simulée", person.name, t(person.activity))} aria-describedby={`presence-${person.name}`}>

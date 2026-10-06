@@ -18,6 +18,7 @@ A familiar email interface with project folders, conversation tracking and conta
 - Contacts, conversation history, notes and saved drafts.
 - French/English interface, IT support demo, search and automatic refresh.
 - Optional IMAP/SMTP connection, encrypted credentials and duplicate-send protection.
+- Keycloak SSO with individual sessions and client-role access control.
 
 See the [feature gallery and technical guide](docs/guide.md) for screenshots and details.
 
@@ -32,7 +33,7 @@ pnpm dev
 
 Open **http://127.0.0.1:3002**. PostgreSQL and the separate API start automatically.
 
-**Default demo:** fictional IT support data, sending disabled and simulated presence. To use a real account, follow [mailbox setup](docs/mailbox-setup.md): live mode requires authentication and encrypted credentials. Notes and drafts remain browser-local; SSO and offline sync are planned.
+**Default demo:** fictional IT support data, sending disabled and simulated presence. To use a real account, follow [mailbox setup](docs/mailbox-setup.md). Enable [Keycloak SSO](docs/keycloak.md) for individual access. Notes and drafts remain browser-local; offline sync is planned.
 
 ## Development
 

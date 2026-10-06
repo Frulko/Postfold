@@ -4,11 +4,13 @@ import { isProjectSettings } from '../../shared/projects'
 import { isConversationUpdate } from '../../shared/conversation-state'
 import { getRequestHeader } from '@tanstack/react-start/server'
 import { isReplyRequest } from '../../shared/mail-account'
+import { authMode } from '../../shared/auth'
 
 function apiPath(path: string) {
   return `${process.env.API_ORIGIN ?? 'http://127.0.0.1:4000'}${process.env.MAILBOX_MODE === 'imap' ? '/mailbox' : '/demo'}${path}`
 }
-function apiHeaders() {
+function apiHeaders(): Record<string, string> {
+  if (authMode() === 'keycloak') return { 'Content-Type': 'application/json', Cookie: getRequestHeader('cookie') ?? '', Origin: process.env.POSTFOLD_ORIGIN ?? '' }
   return { 'Content-Type': 'application/json', ...(process.env.MAILBOX_MODE === 'imap' ? { Authorization: getRequestHeader('authorization') ?? '' } : {}) }
 }
 

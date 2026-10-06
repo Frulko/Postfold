@@ -85,6 +85,12 @@ Live mode imports native IMAP folders and messages and enables SMTP replies. Cre
 
 ![Connected IMAP mailbox with native folders, IT support messages and an enabled SMTP reply composer](screenshots/live-mailbox.png)
 
+### Keycloak identity
+
+Enable [Keycloak SSO](keycloak.md) to sign in individually and restrict mailbox access with a client role. The header shows the current user and a Sign out action; local drafts and notes are separated by user. This capture uses a real Keycloak login with fictional support data.
+
+![Shared IT support inbox with Alice Support authenticated through Keycloak and a Sign out button](screenshots/keycloak-session.png)
+
 ### Mobile inbox
 
 Folder and label sections start collapsed on mobile. Expand them to use the compact, vertically scrollable tree. The conversation list, reader and contact panel stack vertically. Batch actions remain available without changing the position of the conversation rows.
@@ -93,7 +99,7 @@ Folder and label sections start collapsed on mobile. Expand them to use the comp
 
 </details>
 
-All screenshots come from the running application with fictional data. The connected-mailbox capture uses real IMAP/SMTP protocols against an isolated test server; other captures show demo mode with simulated presence. See [docs/screenshots/README.md](screenshots/README.md) for capture details.
+All screenshots come from the running application with fictional data. The connected-mailbox capture uses real IMAP/SMTP protocols against an isolated test server; the SSO capture uses a real Keycloak realm. Other captures show demo mode with simulated presence. See [docs/screenshots/README.md](screenshots/README.md) for capture details.
 
 ## Quick start
 
@@ -158,14 +164,14 @@ Changing the search, conversation filter or project clears selection. A failed l
 | Message/thread display mode | Browser localStorage | Personal preference. |
 | Presence avatars and activity labels | UI fixtures | Simulated. |
 
-Local persistence is not an offline PWA. In live mode, IMAP is authoritative for folders, native moves and the `\Seen` flag; PostgreSQL caches messages and stores collaborative metadata, encrypted accounts and durable send attempts. Browser storage is scoped by mailbox email. Existing demo localStorage keys and database/volume names are retained across the project rename. Old browser-local `placements` entries are ignored: the API provides filing state. Existing demo databases keep their settings; new demo databases receive the IT support fixtures. See [live-mode boundaries](mailbox-setup.md#current-boundaries-and-recovery) for protocol and recovery limits.
+Local persistence is not an offline PWA. In live mode, IMAP is authoritative for folders, native moves and the `\Seen` flag; PostgreSQL caches messages and stores collaborative metadata, encrypted accounts and durable send attempts. Browser storage is scoped by mailbox email and, with Keycloak enabled, user ID. Existing demo localStorage keys and database/volume names are retained across the project rename. Old browser-local `placements` entries are ignored: the API provides filing state. Existing demo databases keep their settings; new demo databases receive the IT support fixtures. See [live-mode boundaries](mailbox-setup.md#current-boundaries-and-recovery) for protocol and recovery limits.
 
 ## Architecture
 
 | Component | Responsibility |
 | --- | --- |
 | `src/` — TanStack Start + React | Interface, SSR, local interactions and server-side HTTP adapters to NestJS. |
-| `api/` — NestJS | Demo endpoints, input validation, PostgreSQL writes and concurrency rules. |
+| `api/` — NestJS | Mail endpoints, input validation, PostgreSQL writes, concurrency rules and Keycloak sessions/guards. |
 | `shared/` | Shared contracts, validators, folder ordering and revision-aware state merging. |
 | PostgreSQL | Authoritative shared folder settings and conversation tracking states. |
 | `api/mail-store.ts` | IMAP polling, UID/UIDVALIDITY reconciliation, native folder/read/move operations, SMTP replies and durable send reservations. |
@@ -175,7 +181,7 @@ The intended boundary keeps messages and project folders in IMAP, with collabora
 ### Next milestones
 
 - Extend IMAP synchronization with incremental MODSEQ, attachment handling and robust reconciliation of ambiguous native changes.
-- Replace the shared live-mode access gate with SSO sessions and per-user mailbox roles; API guards already protect live endpoints.
+- Extend [Keycloak SSO](keycloak.md) with per-action roles, audit attribution and multi-mailbox permissions; individual sessions and client-role guards are implemented.
 - Add provider OAuth and key rotation; password-based IMAP/SMTP already uses authenticated encryption with keys outside PostgreSQL and certificate-validated TLS.
 - Add WebSocket presence, editing reservations and a shared action history; extend the durable send coordination with operator recovery and follow-up replies.
 - Move notes, drafts and contact management into shared storage with conflict handling.

@@ -1,6 +1,6 @@
 # Self-hosting Postfold
 
-This guide deploys Postfold on a Linux server with systemd, starting with the **fictional demo**. To connect a real IMAP/SMTP account, also follow [mailbox setup](mailbox-setup.md), which enables encrypted credentials and mandatory application access checks. SSO and per-user mailbox roles are not implemented. Keep access restricted to your team; everyone with access can modify the shared mailbox.
+This guide deploys Postfold on a Linux server with systemd, starting with the **fictional demo**. To connect a real IMAP/SMTP account, also follow [mailbox setup](mailbox-setup.md). Enable [Keycloak SSO](keycloak.md) for individual sessions and client-role access control. Everyone with the configured mailbox role can modify the shared mailbox.
 
 ## Requirements and layout
 
@@ -182,7 +182,7 @@ support.example.com {
 }
 ```
 
-This [authentication rule covers every request](https://caddyserver.com/docs/caddyfile/directives/basic_auth), including server-function calls and mutations. Add one username/hash per team member if needed. It is an access gate for the demo; Postfold still has no application-level user identity, SSO, permissions or attribution.
+This [authentication rule covers every request](https://caddyserver.com/docs/caddyfile/directives/basic_auth), including server-function calls and mutations. Add one username/hash per team member if needed. This gate supplies no application-level user identity or attribution. For individual sessions and client-role checks, use [Keycloak SSO](keycloak.md) and remove this proxy Basic gate.
 
 ```sh
 sudo caddy validate --config /etc/caddy/Caddyfile
@@ -239,7 +239,7 @@ The demo currently performs schema changes on startup without versioned migratio
 - Store encrypted account configuration with a fresh nonce, authentication tag, key version and mailbox identity bound as associated data. Mailbox passwords must be recoverable for authentication, so hashing alone cannot serve this purpose. Provider OAuth/refresh tokens are not supported yet.
 - Keep encryption keys outside PostgreSQL, Git and browser storage, in an operator-managed secret store or restricted secret file. Decrypt only inside the authorized backend/worker. Plan key rotation and separate key backups; a database dump alone must not reveal credentials. Losing the keys means stored credentials cannot be recovered.
 - Require certificate-validated TLS for SMTP/IMAP; when using STARTTLS, require a successful upgrade before authentication and never fall back to plaintext. Send credential configuration to the backend over HTTPS and never return saved secrets to the UI, logs or error payloads.
-- Require authenticated frontend and API requests in live mode; account configuration is a server-only CLI operation. SSO sessions, per-user roles and delegated account configuration remain planned. Encryption protects stored secrets; a compromised running backend with key access can still decrypt them.
+- Require authenticated frontend and API requests in live mode; account configuration is a server-only CLI operation. Keycloak supplies individual sessions and client-role access control. Per-action roles and delegated account configuration remain planned. Encryption protects stored secrets; a compromised running backend with key access can still decrypt them.
 
 This boundary follows [OWASP's cryptographic storage guidance](https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html) and [secrets management guidance](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html). Deployment environment files remain protected bootstrap configuration; the mail account itself is encrypted in PostgreSQL.
 

@@ -1,6 +1,6 @@
 {
   "name": "postfold",
-  "description": "Open-source, self-hosted shared inbox with native IMAP/SMTP, project folders, contact context and duplicate-reply protection.",
+  "description": "Open-source, self-hosted shared inbox with native IMAP/SMTP, Keycloak SSO, project folders, contact context and duplicate-reply protection.",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -22,6 +22,7 @@
     "typecheck": "tsc --noEmit && tsc -p api/tsconfig.json --noEmit",
     "test": "pnpm db:up && pnpm build:api && node --test src/lib/mailbox.test.ts api/dist/api/app.test.js api/dist/api/mail-secrets.test.js",
     "test:mail": "pnpm db:up && pnpm build:api && node scripts/check-live-mail.mjs",
+    "test:sso": "pnpm db:up && pnpm build && node scripts/check-keycloak.mjs",
     "mailbox:configure": "pnpm build:api && node api/dist/api/configure-mailbox.js",
     "test:drag": "node scripts/check-mail-drag.mjs"
   },
@@ -32,9 +33,11 @@
     "@tanstack/react-router": "1.170.41",
     "@tanstack/react-start": "1.168.60",
     "imapflow": "2.2.6",
+    "jose": "6.2.12",
     "mailparser": "3.9.36",
     "nitro": "3.0.260903-beta",
     "nodemailer": "10.0.15",
+    "openid-client": "6.8.8",
     "pg": "8.23.1",
     "react": "19.3.0",
     "react-dom": "19.3.0",
