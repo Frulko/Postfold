@@ -18,6 +18,8 @@ test('la recherche combine le projet et le contact sans dépendre des accents', 
   assert.equal(filterProjects(mailbox.projects, 'RESIDENCE')[0]?.id, '1842')
   assert.equal(filterProjects(mailbox.projects, ' 1842 ')[0]?.id, '1842')
   assert.equal(filterProjects(mailbox.projects, 'inconnu').length, 0)
+  mailbox.conversations[0].sender = { name: 'Julie', email: 'support@example.test' }
+  assert.equal(filterConversations(mailbox, null, 'support@example.test').length, 1)
 })
 
 test('sélection par plage et déplacement du lot sans modifier les autres échanges', () => {
@@ -81,4 +83,60 @@ test('la relève conserve la dernière révision des états de lecture et de sui
   assert.equal(isConversationUpdate({ targets: [{ id: 'a', revision: 0 }], unread: 'false' }), false)
   assert.equal(isConversationUpdate({ targets: [{ id: 'a', revision: 0 }], status: 'invalid' }), false)
   assert.equal(isConversationUpdate({ targets: [{ id: 'a', revision: 0 }, { id: 'a', revision: 0 }], unread: true }), false)
+})
+
+test('nested folders reject cycles and duplicate siblings and expose descendant conversations', async () => {
+  const { isLabels, isProjectHierarchy, projectPath, projectTree } = await import('../../shared/projects.ts')
+  const projects = [{ id: '1', name: 'Project', color: 'blue' }, { id: 'plans', name: 'Plans', color: 'green', parentId: '1' }, { id: 'archive', name: 'Archive', color: 'slate', parentId: 'plans' }]
+  assert.ok(isProjectHierarchy(projects))
+  assert.equal(prepareProject({ id: 'new', name: 'VPN', color: 'blue', parentId: '1' }, projects, null).parentId, '1')
+  assert.equal(isProjectSettings({ revision: 0, sort: 'manual', projects: [{ ...projects[0], parentId: '' }], order: ['1'] }), false)
+  const mailbox: Mailbox = { projects, contacts: [], conversations: [{ id: 'mail', contactId: 'p', projectId: 'archive', subject: 'VPN', preview: '', body: '', time: '', status: 'open', unread: true, assignee: null }] }
+  assert.equal(filterConversations(mailbox, '1', '').length, 1)
+  assert.equal(filterConversations(mailbox, 'plans', '').length, 1)
+  assert.equal(isProjectHierarchy([...projects, { id: 'copy', name: 'Plans', color: 'rose', parentId: '1' }]), false)
+  assert.equal(isProjectHierarchy(projects.map((item) => item.id === '1' ? { ...item, parentId: 'archive' } : item)), false)
+  assert.equal(isProjectHierarchy([{ ...projects[1], parentId: 'absent' }]), false)
+  assert.equal(projectPath(projects, 'archive'), '1 — Project / Plans / Archive')
+  assert.deepEqual(projectTree(projects, 'manual', ['archive', 'plans', '1']).map(({ project, depth }) => [project.id, depth]), [['1', 0], ['plans', 1], ['archive', 2]])
+  assert.deepEqual(projectTree(projects, 'manual', [], ['1']).map(({ project }) => project.id), ['1'])
+  assert.deepEqual(projectTree(projects, 'manual', [], ['1'], 'archive').map(({ project }) => project.id), ['1', 'plans', 'archive'])
+  assert.ok(isLabels([{ id: 'l1', name: 'Urgent', color: 'rose' }]))
+  assert.equal(isLabels([{ id: 'l1', name: 'Urgent', color: 'rose' }, { id: 'l2', name: 'urgent', color: 'blue' }]), false)
+  assert.equal(isConversationUpdate({ targets: [{ id: 'a', revision: 0 }], addLabelIds: ['l1', 'l1'] }), false)
+  assert.ok(isConversationUpdate({ targets: [{ id: 'a', revision: 0 }], projectId: 'plans', addLabelIds: ['l1'] }))
+})
+
+
+test('locale validation and interpolation preserve user data and unknown messages', async () => {
+  const { parseLocale, translate } = await import('../../shared/i18n.ts')
+  assert.equal(parseLocale('en'), 'en')
+  assert.equal(parseLocale('fr'), 'fr')
+  assert.equal(parseLocale(['en']), 'fr')
+  assert.equal(translate('en', 'Boîte de réception'), 'Inbox')
+  assert.equal(translate('fr', 'Boîte de réception'), 'Boîte de réception')
+  assert.equal(translate('en', 'Attribuer le label {0}', 'Priorité {1}'), 'Assign label Priorité {1}')
+  assert.equal(translate('en', 'Custom project'), 'Custom project')
+  assert.equal(translate('en', '{0} sélectionnée{1}', 2, 's'), '2 selected')
+})
+
+
+test('thread rows group by identity, preserve message IDs and order by latest activity', async () => {
+  const { mailboxRows } = await import('./mailbox.ts')
+  const base = { projectId: '1', contactId: 'p', subject: 'Same subject', preview: 'First', body: '', time: '', status: 'open' as const, assignee: null, unread: false }
+  const messages = [
+    { ...base, id: 'root', sentAt: '2026-10-06T09:00:00+02:00' },
+    { ...base, id: 'other', sentAt: '2026-10-06T10:00:00+02:00' },
+    { ...base, id: 'reply', threadId: 'root', sentAt: '2026-10-06T09:30:00Z', preview: 'Latest reply', unread: true, labelIds: ['urgent'] },
+  ]
+  const threads = mailboxRows(messages, 'threads')
+  assert.equal(threads.length, 2)
+  assert.equal(threads[0].id, 'root')
+  assert.equal(threads[0].unread, true)
+  assert.equal(threads[0].preview, 'Latest reply')
+  assert.deepEqual(threads[0].messageIds, ['root', 'reply'])
+  assert.deepEqual(threads[0].labelIds, ['urgent'])
+  assert.equal(threads[1].id, 'other', 'An identical subject must not merge unrelated mail')
+  assert.deepEqual(mailboxRows(messages, 'messages').map(x=>x.id), ['reply', 'other', 'root'])
+  assert.equal(messages[0].preview, 'First', 'Grouping must not mutate the source')
 })

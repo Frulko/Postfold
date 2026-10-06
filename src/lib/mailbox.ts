@@ -1,21 +1,21 @@
-import type { Mailbox, Project } from '../../shared/mailbox'
+import type { Conversation, Mailbox, Project } from '../../shared/mailbox'
 export type { Project, Contact, Conversation, Mailbox } from '../../shared/mailbox'
+import { projectPath } from '../../shared/projects.ts'
 
 const searchable = (value: string) => value.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase('fr')
 
 export function filterProjects(projects: Project[], query: string) {
   const needle = searchable(query.trim())
-  return projects.filter((project) => searchable(`${project.id} ${project.name}`).includes(needle))
+  return projects.filter((project) => searchable(projectPath(projects, project.id)).includes(needle))
 }
 
 export function filterConversations(mailbox: Mailbox, projectId: string | null, query: string) {
   const needle = searchable(query.trim())
   return mailbox.conversations.filter((conversation) => {
-    if (projectId && conversation.projectId !== projectId) return false
+    if (projectId && conversation.projectId !== projectId && !projectPath(mailbox.projects, conversation.projectId).startsWith(`${projectPath(mailbox.projects, projectId)} /`)) return false
     const contact = mailbox.contacts.find((item) => item.id === conversation.contactId)
-    const project = mailbox.projects.find((item) => item.id === conversation.projectId)
     return searchable([conversation.subject, conversation.preview, contact?.name, contact?.email,
-      contact?.company, project?.id, project?.name].join(' ')).includes(needle)
+      contact?.company, conversation.sender?.name, conversation.sender?.email, conversation.projectId, projectPath(mailbox.projects, conversation.projectId)].join(' ')).includes(needle)
   })
 }
 
@@ -34,4 +34,22 @@ export function moveConversations(mailbox: Mailbox, ids: string[], projectId: st
   }
   return { ...mailbox, conversations: mailbox.conversations.map((item) =>
     ids.includes(item.id) ? { ...item, projectId } : item) }
+}
+
+export const threadKey = (message: Conversation) => message.threadId ?? message.id
+export function mailboxRows(messages: Conversation[], mode: 'messages' | 'threads') {
+  const groups = new Map<string, Conversation[]>()
+  for (const message of messages) {
+    const key = mode === 'threads' ? threadKey(message) : message.id
+    const group = groups.get(key) ?? []
+    group.push(message)
+    groups.set(key, group)
+  }
+  return [...groups.entries()].map(([key, items]) => {
+    const ordered = [...items].sort((a, b) => (Date.parse(a.sentAt ?? '') || 0) - (Date.parse(b.sentAt ?? '') || 0))
+    const first = ordered.find((item) => item.id === key) ?? ordered[0]
+    const latest = ordered.at(-1)!
+    return { ...first, time: latest.time, preview: latest.preview, unread: items.some((item) => item.unread),
+      labelIds: [...new Set(items.flatMap((item) => item.labelIds ?? []))], messageIds: ordered.map((item) => item.id), latestAt: latest.sentAt ?? '' }
+  }).sort((a, b) => (Date.parse(b.latestAt) || 0) - (Date.parse(a.latestAt) || 0))
 }

@@ -13,6 +13,7 @@ const paths = {
   folder: 'M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Zm0 1h18',
   grip: 'M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01',
   edit: 'm16 3 5 5M3 21l5-1L21 7a2 2 0 0 0-4-4L4 16l-1 5Z',
+  tag: 'M3 3h8l10 10-8 8L3 11V3Zm4 4h.01',
 }
 
 export function Icon({ name }: { name: keyof typeof paths }) {

@@ -81,3 +81,34 @@ test('l’API fonctionne et les données de démo exigent une activation explici
     }
   }
 })
+
+test('shared filing and label cleanup preserve hierarchy and reject unsafe deletion', async () => {
+  const mailboxId = `test-${crypto.randomUUID()}`
+  const store = new ProjectStore(mailboxId)
+  const cleanup = new Pool({ connectionString: process.env.DATABASE_URL ?? 'postgresql://mailer_demo:mailer_demo@127.0.0.1:55432/mailer_support' })
+  try {
+    await store.init()
+    const initial = await store.read()
+    let settings = await store.update({ ...initial, projects: [...initial.projects, { id: 'plans-folder', name: 'Plans', parentId: '1842', color: 'blue' }], order: [...initial.order, 'plans-folder'], labels: [{ id: 'urgent', name: 'Urgent', color: 'rose' }] })
+    const states = await store.readConversationStates()
+    const targets = states.filter((item) => ['plans', 'delivery'].includes(item.id)).map(({ id, revision }) => ({ id, revision }))
+    const updated = await store.updateConversations({ targets, projectId: 'plans-folder', addLabelIds: ['urgent'] })
+    assert.ok(updated.every((item) => item.projectId === 'plans-folder' && item.labelIds?.includes('urgent')))
+    await assert.rejects(store.updateConversations({ targets: updated.map(({ id, revision }) => ({ id, revision })), addLabelIds: ['unknown'] }))
+    await assert.rejects(store.update({ ...settings, projects: settings.projects.filter((item) => item.id !== 'plans-folder'), order: settings.order.filter((id) => id !== 'plans-folder') }))
+    await assert.rejects(store.update({ ...settings, projects: settings.projects.map((item) => item.id === '1842' ? { ...item, parentId: 'plans-folder' } : item) }))
+    settings = await store.update({ ...settings, labels: [] })
+    const cleaned = (await store.readConversationStates()).filter((item) => ['plans', 'delivery'].includes(item.id))
+    assert.ok(cleaned.every((item) => item.labelIds?.length === 0 && item.projectId === 'plans-folder'))
+    assert.equal(cleaned[0].revision, updated[0].revision + 1)
+    await assert.rejects(store.updateConversations({ targets: updated.map(({ id, revision }) => ({ id, revision })), projectId: '1842' }))
+    await store.updateConversations({ targets: cleaned.map(({ id, revision }) => ({ id, revision })), projectId: '1842' })
+    settings = await store.update({ ...settings, projects: settings.projects.filter((item) => item.id !== 'plans-folder'), order: settings.order.filter((id) => id !== 'plans-folder') })
+    assert.ok(!settings.projects.some((item) => item.id === 'plans-folder'))
+    assert.ok((await store.readConversationStates()).filter((item) => ['plans', 'delivery'].includes(item.id)).every((item) => item.projectId === '1842'))
+  } finally {
+    await store.onApplicationShutdown()
+    await cleanup.query('DELETE FROM demo_project_settings WHERE mailbox_id = $1', [mailboxId])
+    await cleanup.end()
+  }
+})

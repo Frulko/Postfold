@@ -20,7 +20,7 @@ class DemoController {
   async mailbox() {
     const [settings, conversationStates] = await Promise.all([this.projects.read(), this.projects.readConversationStates()])
     const { projects, ...projectSettings } = settings
-    return { ...demoMailbox, projects, projectSettings, conversationStates, conversations: applyConversationStates(demoMailbox.conversations, conversationStates) }
+    return { ...demoMailbox, projects, labels: settings.labels ?? [], projectSettings, conversationStates, conversations: applyConversationStates(demoMailbox.conversations, conversationStates) }
   }
   @Put('projects')
   updateProjects(@Body() input: unknown) { return this.projects.update(input) }

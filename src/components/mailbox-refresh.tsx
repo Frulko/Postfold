@@ -1,10 +1,12 @@
+import { useI18n } from '../lib/i18n'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from './icon'
 
 export function MailboxRefresh({ onRefresh }: { onRefresh: () => Promise<void> }) {
+  const { t, locale } = useI18n()
   const [automatic, setAutomatic] = useState(true)
   const [busy, setBusy] = useState(false)
-  const [lastRefresh, setLastRefresh] = useState<string | null>(null)
+  const [lastRefresh, setLastRefresh] = useState<number | null>(null)
   const [failed, setFailed] = useState(false)
   const inFlight = useRef(false)
 
@@ -15,7 +17,7 @@ export function MailboxRefresh({ onRefresh }: { onRefresh: () => Promise<void> }
     setFailed(false)
     try {
       await onRefresh()
-      setLastRefresh(new Date().toLocaleTimeString('fr-FR'))
+      setLastRefresh(Date.now())
     } catch {
       setFailed(true)
     } finally {
@@ -32,10 +34,10 @@ export function MailboxRefresh({ onRefresh }: { onRefresh: () => Promise<void> }
     return () => clearInterval(timer)
   }, [automatic, refresh])
 
-  const status = failed ? 'Actualisation impossible. Vos données restent affichées.' : lastRefresh ? `Actualisé à ${lastRefresh}` : 'API de démo'
-  return <div className="mailbox-refresh" role="group" aria-label="Actualisation de démonstration">
-    <button className={`refresh-button ${busy ? 'refreshing' : ''}`} disabled={busy} aria-busy={busy} onClick={() => void refresh()} title="Actualiser les données de démonstration — aucune boîte IMAP connectée"><Icon name="refresh" />{busy ? 'Relève…' : 'Relever'}</button>
-    <label className="auto-refresh"><input type="checkbox" checked={automatic} onChange={(event) => setAutomatic(event.target.checked)} aria-label="Relève automatique toutes les 30 secondes" />Auto <span>30 s</span></label>
+  const status = failed ? t("Actualisation impossible. Vos données restent affichées.") : lastRefresh ? t("Actualisé à {0}", new Date(lastRefresh).toLocaleTimeString(locale === 'en' ? 'en-GB' : 'fr-FR')) : t("API de démo")
+  return <div className="mailbox-refresh" role="group" aria-label={t("Actualisation de démonstration")}>
+    <button className={`refresh-button ${busy ? 'refreshing' : ''}`} disabled={busy} aria-busy={busy} onClick={() => void refresh()} title={t("Actualiser les données de démonstration — aucune boîte IMAP connectée")}><Icon name="refresh" />{busy ? t("Relève…") : t("Relever")}</button>
+    <label className="auto-refresh"><input type="checkbox" checked={automatic} onChange={(event) => setAutomatic(event.target.checked)} aria-label={t("Relève automatique toutes les 30 secondes")} />{t("Auto")} <span>30 s</span></label>
     <span className={`refresh-status ${failed ? 'failed' : ''}`} role={failed ? 'alert' : 'status'} title={status}>{status}</span>
   </div>
 }

@@ -1,13 +1,15 @@
+import { useI18n } from '../lib/i18n'
 import { useEffect, useId, useState } from 'react'
 import { filterProjects, type Project } from '../lib/mailbox'
 import { Icon } from './icon'
-import { projectColor } from '../../shared/projects'
+import { projectColor, projectPath } from '../../shared/projects'
 
 export function ProjectPicker({ projects, disabled, onSelect }: {
   projects: Project[]
   disabled: boolean
-  onSelect: (id: string) => boolean
+  onSelect: (id: string) => boolean | Promise<boolean>
 }) {
+  const { t } = useI18n()
   const id = useId()
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
@@ -19,16 +21,16 @@ export function ProjectPicker({ projects, disabled, onSelect }: {
     if (activeId) document.getElementById(activeId)?.scrollIntoView({ block: 'nearest' })
   }, [activeId])
 
-  function select(projectId: string) {
-    if (!onSelect(projectId)) return
+  async function select(projectId: string) {
+    if (!await onSelect(projectId)) return
     setOpen(false)
     setQuery('')
     setActiveIndex(-1)
   }
 
   return <div className="project-picker">
-    <label className="picker-label" htmlFor={`${id}-input`}>Déplacer vers un projet</label>
-    <div className="picker-field"><Icon name="search" /><input id={`${id}-input`} role="combobox" aria-expanded={open} aria-controls={open ? `${id}-list` : undefined} aria-autocomplete="list" aria-activedescendant={activeId} autoComplete="off" placeholder="Rechercher un ID ou un nom…" disabled={disabled} value={query}
+    <label className="picker-label" htmlFor={`${id}-input`}>{t("Déplacer vers un projet")}</label>
+    <div className="picker-field"><Icon name="search" /><input id={`${id}-input`} role="combobox" aria-expanded={open} aria-controls={open ? `${id}-list` : undefined} aria-autocomplete="list" aria-activedescendant={activeId} autoComplete="off" placeholder={t("Rechercher un ID ou un nom…")} disabled={disabled} value={query}
       onFocus={() => setOpen(true)} onBlur={() => setOpen(false)}
       onChange={(event) => { setQuery(event.target.value); setActiveIndex(0); setOpen(true) }}
       onKeyDown={(event) => {
@@ -41,13 +43,13 @@ export function ProjectPicker({ projects, disabled, onSelect }: {
         if (event.key === 'Enter' && open && results[activeIndex]) { event.preventDefault(); select(results[activeIndex].id) }
       }} /></div>
     {open ? <div className="picker-popup">
-      <ul id={`${id}-list`} role="listbox" aria-label="Projets de destination">
+      <ul id={`${id}-list`} role="listbox" aria-label={t("Projets de destination")}>
         {results.map((project, index) => <li id={`${id}-${project.id}`} role="option" aria-selected={activeIndex === index} key={project.id}
           onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => setActiveIndex(index)} onClick={() => select(project.id)}>
-          <span className="project-dot" style={{ backgroundColor: projectColor(project.color) }} /><span className="picker-project-id">{project.id}</span><span className="picker-project-name">{project.name}</span>
+          <span className="project-dot" style={{ backgroundColor: projectColor(project.color) }} />{!project.parentId ? <span className="picker-project-id">{project.id}</span> : null}<span className="picker-project-name">{project.parentId ? projectPath(projects, project.id) : project.name}</span>
         </li>)}
       </ul>
-      {!results.length ? <p className="picker-empty" role="status">Aucun projet trouvé.</p> : null}
+      {!results.length ? <p className="picker-empty" role="status">{t("Aucun projet trouvé.")}</p> : null}
     </div> : null}
   </div>
 }
