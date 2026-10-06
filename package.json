@@ -1,0 +1,49 @@
+{
+  "name": "postfold",
+  "description": "An open-source shared support inbox organized around project folders.",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "packageManager": "pnpm@10.31.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "pnpm db:up && pnpm build:api && concurrently --kill-others --names web,api,tsc \"pnpm dev:web\" \"pnpm dev:api\" \"pnpm watch:api\"",
+    "db:up": "docker compose up -d --wait db",
+    "dev:web": "vite --host 127.0.0.1 --port 3002 --strictPort",
+    "dev:api": "DEMO_MODE=true node --watch api/dist/api/main.js",
+    "watch:api": "tsc -p api/tsconfig.json --watch --preserveWatchOutput",
+    "build": "pnpm build:api && vite build",
+    "build:api": "tsc -p api/tsconfig.json",
+    "start": "node .output/server/index.mjs",
+    "start:api": "node api/dist/api/main.js",
+    "typecheck": "tsc --noEmit && tsc -p api/tsconfig.json --noEmit",
+    "test": "pnpm db:up && pnpm build:api && node --test src/lib/mailbox.test.ts api/dist/api/app.test.js",
+    "test:drag": "node scripts/check-mail-drag.mjs"
+  },
+  "dependencies": {
+    "@nestjs/common": "12.1.2",
+    "@nestjs/core": "12.1.2",
+    "@nestjs/platform-express": "12.1.2",
+    "@tanstack/react-router": "1.170.41",
+    "@tanstack/react-start": "1.168.60",
+    "nitro": "3.0.260903-beta",
+    "pg": "8.23.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.4",
+    "@types/pg": "8.23.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "concurrently": "10.0.5",
+    "typescript": "7.0.2",
+    "vite": "8.3.3"
+  }
+}

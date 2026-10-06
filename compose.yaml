@@ -1,0 +1,18 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: mailer_demo
+      POSTGRES_PASSWORD: mailer_demo
+      POSTGRES_DB: mailer_support
+    ports:
+      - '127.0.0.1:55432:5432'
+    volumes:
+      - mailer-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U mailer_demo -d mailer_support']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+volumes:
+  mailer-postgres:
