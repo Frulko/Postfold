@@ -1,3 +1,5 @@
+<img src="public/icon.svg" alt="Postfold folded P logo" width="64" height="64" />
+
 # Postfold
 
 **An open-source shared support inbox, organized around your projects.**

@@ -1,6 +1,6 @@
 {
   "name": "postfold",
-  "description": "An open-source shared support inbox organized around project folders.",
+  "description": "Open-source, self-hosted shared inbox with native IMAP/SMTP, project folders, contact context and duplicate-reply protection.",
   "version": "0.1.0",
   "private": true,
   "type": "module",

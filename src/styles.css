@@ -36,8 +36,7 @@ b, time { font-variant-numeric: tabular-nums; }
 .folder-heading { flex-shrink: 0; }
 .folder-content { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .brand { display: flex; align-items: center; gap: 9px; padding: 0 8px; font-size: 17px; font-weight: 650; letter-spacing: -.5px; min-height: 40px; }
-.brand-mark { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 7px; background: #18181b; color: #fff; box-shadow: 0 1px 2px #00000012; }
-.brand-mark .icon { width: 18px; height: 18px; }
+.brand-mark { display: block; flex-shrink: 0; width: 30px; height: 30px; border-radius: 7px; box-shadow: 0 1px 2px #00000012; }
 .brand-label { margin-left: auto; font-size: 10px; font-weight: 500; letter-spacing: 0; color: #52525b; border: 1px solid var(--line); border-radius: 5px; padding: 3px 5px; background: #fff; }
 .workspace-name { display: flex; align-items: center; gap: 10px; padding: 12px 10px; margin: 26px 0 20px; background: #fff; border: 1px solid var(--line); border-radius: var(--radius); font-size: 12px; font-weight: 600; box-shadow: 0 1px 2px #00000004; }
 .workspace-name small, .sidebar-bottom small { display: block; color: var(--muted); font-weight: 400; font-size: 11px; margin-top: 4px; }

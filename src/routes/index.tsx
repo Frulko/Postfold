@@ -364,7 +364,7 @@ function MailboxPage() {
   return (
     <div className="workspace">
       <aside className="sidebar" aria-label={t("Navigation principale")}>
-        <a className="brand" href={`/?lang=${locale}`} aria-label={t("Postfold, accueil")}><span className="brand-mark"><Icon name="mail" /></span>Postfold<span className="brand-label">{t("Support")}</span></a>
+        <a className="brand" href={`/?lang=${locale}`} aria-label={t("Postfold, accueil")}><img className="brand-mark" src="/icon.svg" width="30" height="30" alt="" />Postfold<span className="brand-label">{t("Support")}</span></a>
         <div className="workspace-name"><span className="workspace-avatar">S</span><div>{t("Équipe support")}<small>{mailbox.connection?.email ?? t("Espace de démonstration")}</small></div></div>
         <nav className="main-nav">
           <button className={view === 'mail' && !projectId ? 'nav-button active' : 'nav-button'} onClick={() => selectProject(null)}><Icon name="mail" />{t("Boîte de réception")}<b>{mailboxRows(mailbox.conversations, displayMode).length}</b></button>
