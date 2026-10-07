@@ -17,7 +17,7 @@ A familiar email interface with project folders, conversation tracking and conta
 - First-gesture drag-and-drop and batch actions that keep the list stable.
 - Multiple thread participants, individual contact notes and saved rich drafts.
 - Personal/team email templates, HTML signatures and a team management dashboard.
-- Rich text replies, previews and draft attachments with real multipart SMTP sending.
+- Compact rich text editor with an expanded writing mode, previews and persistent attachments.
 - Viewport layout with fixed headers and independent panel scrolling.
 - French/English interface, IT support demo, search and automatic refresh.
 - Optional IMAP/SMTP connection, encrypted credentials and duplicate-send protection.

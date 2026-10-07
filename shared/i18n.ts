@@ -1,6 +1,16 @@
 export type Locale = 'fr' | 'en'
 
 const english: Record<string, string> = {
+  "Agrandir l’éditeur": "Expand editor",
+  "Réduire l’éditeur": "Minimize editor",
+  "Plus de mise en forme": "More formatting",
+  "Ajouter une ligne": "Add row",
+  "Ajouter une colonne": "Add column",
+  "Supprimer le tableau": "Delete table",
+  "Afficher la signature": "Show signature",
+  "Masquer la signature": "Hide signature",
+  "Options du message": "Message options",
+
   "octets": "bytes",
   "Ko": "KB",
   "Confirmer la suppression": "Confirm deletion",

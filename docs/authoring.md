@@ -32,7 +32,9 @@ Use [Keycloak](keycloak.md) for individual identities. Bootstrap an administrato
 
 ## Rich replies and draft files
 
-The editor provides bold, italic, underline, strikethrough, lists, quotes, links, tables, undo/redo and clear formatting. **Preview** shows the email body and signature before sending. **Save draft** and **Send** remain available together; **Ctrl/⌘ + Enter** uses the same guarded Send action.
+The compact formatting bar provides bold, italic, underline, strikethrough, lists, quotes, links, tables, undo/redo and clear formatting. Less frequent tools live in **More formatting**; table commands appear when the cursor is in a table.
+
+On narrow screens the formatting bar scrolls horizontally without moving the page. **Expand editor** opens a native dialog with a fixed toolbar and send controls; only the writing area scrolls on taller screens. **Minimize editor** or Escape returns to the conversation without rebuilding the editor or clearing undo history. Short landscape screens scroll the composer to keep every control reachable. Save/send feedback also appears inside the expanded view. **Show signature** expands its sandboxed preview; collapsing it leaves the signature attached to the draft. **Preview** shows the email body and signature before sending. **Save draft** and **Send** remain available together; **Ctrl/⌘ + Enter** uses the same guarded Send action.
 
 Rich draft text and the selected signature autosave in localStorage after a short pause, when changing conversations and before leaving the page. Draft files use IndexedDB and are saved before appearing in the attachment list. Select files, drop them on the composer or paste file/image clipboard data. Remove a file with its cross button. Each draft supports **10 nonempty files**, with **10 MiB total decoded size**; the API independently enforces these limits and rejects file paths or header injection. NestJS caps JSON requests at 16 MiB, allowing base64 transport overhead. If a reverse proxy sets a lower body limit, raise it to at least 16 MiB.
 

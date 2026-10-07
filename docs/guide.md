@@ -76,9 +76,11 @@ Keep contact details, related projects and conversation history together. Multi-
 
 ### Draft composer
 
-Write rich replies with formatting, lists, links, tables, template insertion and an assigned signature. Preview the HTML before sending. Attach files by selection, drag-and-drop or clipboard paste; attachments survive reloads in IndexedDB. Text and formatting are autosaved locally, with Save draft and Send available together. Send remains disabled in the fictional demo. [Writing and team management](authoring.md) covers permissions and limits.
+Write rich replies with formatting, lists, links, tables, template insertion and an assigned signature. Expand the editor for a dedicated writing viewport with fixed controls, including on mobile. Show or collapse the signature preview and inspect the complete HTML before sending. Switching modes preserves editor history. Attach files by selection, drag-and-drop or clipboard paste; attachments survive reloads in IndexedDB. Text and formatting are autosaved locally, with Save draft and Send available together. Send remains disabled in the fictional demo. [Writing and team management](authoring.md) covers permissions and limits.
 
-![Draft composer with Save draft and disabled Send buttons beside contact notes](screenshots/draft-composer.png)
+![Compact draft composer with formatting, signature preview, attachments and Save draft/Send controls](screenshots/draft-composer.png)
+
+![Expanded mobile writing viewport with fixed formatting and send controls](screenshots/mobile-composer.png)
 
 ### Templates, signatures and team management
 
