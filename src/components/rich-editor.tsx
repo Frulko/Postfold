@@ -15,7 +15,7 @@ export function RichEditor({ value, onChange, disabled = false, id = 'reply', la
   const [link, setLink] = useState('')
   const filesHandler = useRef(onFiles); filesHandler.current = disabled ? undefined : onFiles
   const editor = useEditor({ extensions: [TableKit.configure({ table: { resizable: false } }), Image.configure({ inline: true, allowBase64: false }), EmailStyles, StarterKit.configure({ heading: { levels: [1, 2, 3] }, codeBlock: false, code: false, link: { openOnClick: false, HTMLAttributes: { rel: 'noopener noreferrer' } } })],
-    content: value, immediatelyRender: false, autofocus: id === 'reply' ? 'end' : false, editable: !disabled,
+    content: value, immediatelyRender: false, autofocus: false, editable: !disabled,
     editorProps: { attributes: { id, role: 'textbox', 'aria-label': label, 'aria-multiline': 'true', 'data-placeholder': t('Écrivez votre message…') },
       handleDOMEvents: { paste: (_, event) => { const files = Array.from(event.clipboardData?.files ?? []); if (files.length && filesHandler.current) { event.preventDefault(); filesHandler.current(files); return true } return false } },
     }, onUpdate: ({ editor }) => onChange(editor.getHTML(), editor.getText()),

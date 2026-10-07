@@ -20,7 +20,7 @@ const browser = async (...args) => (await command('agent-browser', ['--session',
 const evaluate = async script => JSON.parse(await browser('eval', script))
 const click = async selector => {
   // Scroll only actual panels; hidden shell ancestors must never move the header.
-  await evaluate(`(() => { const target=document.querySelector(${JSON.stringify(selector)}); for(let parent=target.parentElement;parent;parent=parent.parentElement) { if(!['auto','scroll'].includes(getComputedStyle(parent).overflowY)) continue; const rect=target.getBoundingClientRect(), bounds=parent.getBoundingClientRect(), toolbar=target.closest(".reading-pane")?.querySelector(".reading-toolbar"); const top=toolbar && !toolbar.contains(target) ? Math.max(bounds.top,toolbar.getBoundingClientRect().bottom) : bounds.top; if(rect.top<top||rect.bottom>bounds.bottom) parent.scrollTop+=rect.top-top-(bounds.bottom-top)/2+rect.height/2; } return true })()`)
+  await evaluate(`(() => { const target=document.querySelector(${JSON.stringify(selector)}); for(let parent=target.parentElement;parent;parent=parent.parentElement) { if(!['auto','scroll'].includes(getComputedStyle(parent).overflowY)) continue; const rect=target.getBoundingClientRect(), bounds=parent.getBoundingClientRect(), toolbar=target.closest(".reading-pane")?.querySelector(".reading-context"); const top=toolbar && !toolbar.contains(target) ? Math.max(bounds.top,toolbar.getBoundingClientRect().bottom) : bounds.top; if(rect.top<top||rect.bottom>bounds.bottom) parent.scrollTop+=rect.top-top-(bounds.bottom-top)/2+rect.height/2; } return true })()`)
   await browser('click', selector)
 }
 let app, web
@@ -34,6 +34,17 @@ try {
   for (let i = 0; i < 50; i++) { try { ready = (await fetch(origin + '/?lang=en')).ok; if (ready) break } catch {} await delay(200) }
   assert.ok(ready)
   await browser('open', origin + '/?lang=en'); await browser('set', 'viewport', '1440', '1040'); await browser('wait', '.thread-row'); await browser('uncheck', '.auto-refresh input')
+  const capture = async name => { if (process.env.AUTHORING_SCREENSHOTS) { mkdirSync(process.env.AUTHORING_SCREENSHOTS, { recursive: true }); await browser('screenshot', join(process.env.AUTHORING_SCREENSHOTS, name)) } }
+  if (process.env.AUTHORING_SCREENSHOTS) {
+    await capture('inbox-overview.png'); await capture('all-messages.png')
+    await browser('select', '[aria-label="Display mode"]', 'threads'); await click('[data-conversation-id="incident-rollout"] .thread-open')
+    await browser('wait', '--fn', 'document.querySelector(".reading-pane").scrollTop > 0')
+    await capture('conversation-thread.png')
+    await click('.contact-toggle'); await capture('contact-collapsed.png'); await click('.contact-toggle')
+    await browser('set', 'viewport', '390', '844'); await click('.main-nav button:first-child'); await capture('mobile-inbox.png')
+    await click('[data-conversation-id="incident-rollout"] .thread-open'); await capture('mobile-thread.png')
+    await browser('set', 'viewport', '1440', '1040'); await browser('select', '[aria-label="Display mode"]', 'messages')
+  }
   await click('.main-nav button:last-child'); await browser('wait', '.settings-card')
   for (const scope of ['personal', 'team']) {
     await click('.settings-tools .primary-button'); await browser('wait', '#settings-rich-editor')
@@ -55,7 +66,6 @@ try {
   assert.equal(await evaluate('document.querySelector(".settings-editor input").value'), editedName)
   await click('.settings-editor footer .primary-button'); await browser('wait', '--fn', '!document.querySelector(".settings-dialog")')
   console.info('Concurrent settings edit preserves content and allows explicit reload/retry inside the dialog: passed')
-  const capture = async name => { if (process.env.AUTHORING_SCREENSHOTS) { mkdirSync(process.env.AUTHORING_SCREENSHOTS, { recursive: true }); await browser('screenshot', join(process.env.AUTHORING_SCREENSHOTS, name)) } }
   console.info('Personal and shared templates created: passed')
   await capture('email-templates.png')
   await click('.settings-tabs button:nth-child(2)'); await click('.settings-tools .primary-button'); await browser('wait', '.html-source')
@@ -138,8 +148,9 @@ try {
     await browser('open', origin + '/?lang=en'); await browser('set', 'viewport', String(width), String(height)); await browser('wait', '.thread-row'); await browser('uncheck', '.auto-refresh input'); assert.deepEqual(await evaluate('[innerWidth,innerHeight]'), [width,height]); assert.ok(await evaluate('document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight + 1'))
     if (!await evaluate('!!document.querySelector("#reply")')) { await click('.reply-bar button'); await browser('wait', '#reply') }
     if (await evaluate('!!document.querySelector("#reply")')) {
+      await browser('wait', '--fn', 'document.activeElement?.id === "reply"')
       assert.ok(await evaluate('(() => { const toolbar=document.querySelector(".editor-toolbar").getBoundingClientRect(); return toolbar.width<=innerWidth && toolbar.height<65 })()'))
-      await click('.composer-expand'); const expandedBounds=await evaluate('document.querySelector(".composer-shell:modal").getBoundingClientRect().toJSON()'); assert.ok(expandedBounds.left>=0 && expandedBounds.right<=width && expandedBounds.top>=0 && expandedBounds.bottom<=height, JSON.stringify(expandedBounds))
+      await click('.composer-expand'); await browser('wait', '.composer-shell:modal'); const expandedBounds=await evaluate('document.querySelector(".composer-shell:modal").getBoundingClientRect().toJSON()'); assert.ok(expandedBounds.left>=0 && expandedBounds.right<=width && expandedBounds.top>=0 && expandedBounds.bottom<=height, JSON.stringify(expandedBounds))
       await click('.editor-more summary'); assert.ok(await evaluate('(() => { const box=document.querySelector(".editor-more-menu").getBoundingClientRect(); return box.left>=0 && box.right<=innerWidth })()')); await browser('press', 'Escape')
       await click('.template-control>button'); assert.ok(await evaluate('(() => { const box=document.querySelector(".template-menu").getBoundingClientRect(); return box.left>=0 && box.right<=innerWidth })()')); await browser('press', 'Escape')
       await browser('press', 'Escape'); await browser('wait', '--fn', '!document.querySelector(".composer-shell:modal")'); console.info(`Composer tools and expanded viewport ${width}×${height}: passed`)

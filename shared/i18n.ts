@@ -1,6 +1,9 @@
 export type Locale = 'fr' | 'en'
 
 const english: Record<string, string> = {
+  "Message envoyé": "Message sent",
+  "Afficher la fiche contact": "Show contact profile",
+  "Masquer la fiche contact": "Hide contact profile",
   "Agrandir l’éditeur": "Expand editor",
   "Réduire l’éditeur": "Minimize editor",
   "Plus de mise en forme": "More formatting",

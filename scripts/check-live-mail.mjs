@@ -303,6 +303,8 @@ try {
         await browser('screenshot', process.env.MAIL_TEST_SCREENSHOT ?? join(directory, 'live-mail.png'))
         await browser('find', 'role', 'button', 'click', '--name', 'Send', '--exact')
         await browser('wait', '--text', 'Reply accepted by the SMTP server.')
+        await browser('wait', '--fn', `Array.from(document.querySelectorAll('[data-message-id]')).some(message => message.dataset.messageId.startsWith('sent_') && message.textContent.includes('Your laptop enrollment is complete.'))`)
+        await browser('wait', '--fn', `(() => { const sent = Array.from(document.querySelectorAll('[data-message-id]')).find(message => message.dataset.messageId.startsWith('sent_')); const rect = sent.getBoundingClientRect(), pane = document.querySelector('.reading-pane').getBoundingClientRect(), header = document.querySelector('.reading-context').getBoundingClientRect(); return rect.top >= header.bottom && rect.bottom <= pane.bottom; })()`)
         const stored = await browser('eval', "JSON.parse(localStorage.getItem('postfold:mailbox:support@postfold.test:v1')).drafts")
         assert.ok(!stored.includes('Your laptop enrollment is complete.'))
         console.info('Browser: authenticated SSR, server functions, draft saved before real SMTP send, success cleanup: passed')

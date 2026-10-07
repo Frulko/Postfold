@@ -6,6 +6,7 @@ These PNGs are captured from the running Postfold application, not generated moc
 | --- | --- | --- |
 | `inbox-overview.png` | Project folders, search/filters, reader and contact context | 1440 × 1040 |
 | `conversation-thread.png` | Eighteen-message SSO incident, newest/oldest sorting and three participant profiles | 1440 × 1040 |
+| `contact-collapsed.png` | Wider reader with the contact profile hidden and compact sticky context | 1440 × 1040 |
 | `all-messages.png` | Individual mail list and direct reply controls | 1440 × 1040 |
 | `batch-actions.png` | Two selected conversations, state actions and destination search | 1440 × 1040 |
 | `folder-drop-target.png` | Two source rows during a real drag and highlighted destination | 1440 × 1040 |
@@ -41,3 +42,5 @@ For the drag capture, select two conversations and hold a real mouse drag over a
 Folder screenshots can be taken from the editor without saving changes. Notes and drafts may be created in the isolated browser using fictional text. Do not replace shared data merely to make a screenshot look fuller. Close the capture session when finished.
 
 When changing a screenshot filename, update its README links and alt text. Preserve the distinction between shared folder/tracking state, shared filing/labels, browser-local notes/drafts and simulated presence.
+
+Capture the current inbox, thread, contact layout, mobile views and writing features together with `AUTHORING_SCREENSHOTS="$PWD/docs/screenshots" pnpm test:authoring`. The capture script uses its own temporary mailbox and keeps existing mailbox folders untouched.

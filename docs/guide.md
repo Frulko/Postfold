@@ -56,9 +56,17 @@ In manual sort mode, drag a grip above or below a sibling to reorder it. Drop in
 
 Choose **All messages** to list each email separately, with direct reply controls. Choose **Conversations** to group messages by explicit thread ID, show the latest preview and activity, and expand individual messages in the reader. Matching subjects alone never merge unrelated messages.
 
-Display mode and list/thread ordering are saved independently in this browser. Both orders default to newest first; choose oldest first to read chronologically. Switching views or order preserves the current draft. Message actions affect one message in All messages mode; thread actions affect every message in that thread, including messages outside the current folder or search filter. Opening a thread marks its messages read. Drafts remain associated with the message being answered.
+Display mode and list/thread ordering are saved independently in this browser. The list defaults to newest activity first. Threads default to oldest first and open at the latest message, like a messaging conversation; either order can be changed. Existing saved choices are kept.
+
+A compact sticky header keeps the subject, participants and reply action visible. Opening a reply brings the composer into view; replies accepted by SMTP are selected in the reader. Refreshing does not reset your reading position.
+
+Switching views or order preserves the current draft. Message actions affect one message in All messages mode; thread actions affect every message in that thread, including messages outside the current folder or search filter. Opening a thread marks its messages read. Drafts remain associated with the message being answered.
+
+The contact profile can be hidden to give the reader more space; its visibility is saved in this browser, and toggling it preserves unsaved notes.
 
 ![An 18-message support incident with saved ordering and individual participant profiles](screenshots/conversation-thread.png)
+
+![Wider conversation reader with the contact profile collapsed](screenshots/contact-collapsed.png)
 
 ![Individual IT support emails in All messages mode](screenshots/all-messages.png)
 

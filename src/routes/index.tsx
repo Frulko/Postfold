@@ -25,7 +25,7 @@ const AuthoringPage = lazy(() => import('../components/authoring-settings').then
 export const Route = createFileRoute('/')({ loader: () => getDemoMailbox(), component: MailboxPage })
 
 type Note = { id: string; contactId: string; body: string; createdAt: string }
-type LocalData = { notes: Note[]; drafts: Record<string, string | RichDraft>; sendRequests?: Record<string, string>; placements?: Record<string, string>; displayMode?: 'messages' | 'threads'; listOrder?: MailOrder; conversationOrder?: MailOrder }
+type LocalData = { notes: Note[]; drafts: Record<string, string | RichDraft>; sendRequests?: Record<string, string>; placements?: Record<string, string>; displayMode?: 'messages' | 'threads'; listOrder?: MailOrder; conversationOrder?: MailOrder; contactCollapsed?: boolean }
 const initials = (name: string) => name.split(' ').map((part) => part[0]).slice(0, 2).join('')
 const demoPresence = [
   { name: 'Julie', initials: 'JD', state: 'online', activity: 'Disponible' },
@@ -44,6 +44,7 @@ function isLocalData(value: unknown): value is LocalData {
     (!('sendRequests' in value) || (!!value.sendRequests && typeof value.sendRequests === 'object' && !Array.isArray(value.sendRequests) && Object.values(value.sendRequests).every((id) => typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id)))) &&
     (!('displayMode' in value) || value.displayMode === 'messages' || value.displayMode === 'threads') &&
     (!('listOrder' in value) || value.listOrder === 'newest' || value.listOrder === 'oldest') &&
+    (!('contactCollapsed' in value) || typeof value.contactCollapsed === 'boolean') &&
     (!('conversationOrder' in value) || value.conversationOrder === 'newest' || value.conversationOrder === 'oldest') &&
     (!('placements' in value) || (!!value.placements && typeof value.placements === 'object' &&
       !Array.isArray(value.placements) && Object.values(value.placements).every((id) => typeof id === 'string')))
@@ -68,6 +69,7 @@ function MailboxPage() {
       projectSettings: freshMailbox.projectSettings.revision >= current.projectSettings.revision ? freshMailbox.projectSettings : current.projectSettings,
       conversationStates: states, conversations: applyConversationStates(freshMailbox.conversations, states),
     }))
+    return freshMailbox
   }, [])
   const [projectId, setProjectId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -106,6 +108,7 @@ function MailboxPage() {
   const bulkTools = useRef<HTMLDivElement>(null)
   const bulkTrigger = useRef<HTMLButtonElement>(null)
   const readingPane = useRef<HTMLElement>(null)
+  const contactReturnScroll = useRef<number | null>(null)
 
   useEffect(() => {
     if (!bulkOpen) return
@@ -122,6 +125,10 @@ function MailboxPage() {
         if (!isLocalData(parsed)) throw new Error(t("Données locales non reconnues."))
         setLocal(parsed)
         localRef.current = parsed
+        if (parsed.displayMode === 'threads') {
+          const row = mailboxRows(initialMailbox.conversations, 'threads').find(item => item.messageIds.includes(selectedId))
+          if (row) setSelectedId(row.messageIds.at(-1)!)
+        }
       }
       setStorageReady(true)
     } catch {
@@ -149,7 +156,8 @@ function MailboxPage() {
     .filter((item) => (status === 'all' || (status === 'unread' ? item.unread : item.status === status)) && (!activeLabel || item.labelIds?.includes(activeLabel)))
   const displayMode = local.displayMode ?? 'messages'
   const listOrder = local.listOrder ?? 'newest'
-  const conversationOrder = local.conversationOrder ?? 'newest'
+  const conversationOrder = local.conversationOrder ?? 'oldest'
+  const contactCollapsed = view === 'mail' && !!local.contactCollapsed
   const rows = mailboxRows(conversations, displayMode, listOrder)
   const conversation = mailbox.conversations.find((item) => item.id === selectedId) ?? mailbox.conversations[0] ?? { id: '', projectId: '', contactId: '', subject: '', preview: '', body: '', time: '', status: 'open' as const, assignee: null, unread: false }
   const replyContact = mailbox.contacts.find((item) => item.id === conversation.contactId) ?? mailbox.contacts[0] ?? { id: '', name: '', email: '', company: '', phone: '' }
@@ -174,7 +182,60 @@ function MailboxPage() {
   const allChosen = rows.length > 0 && chosen.length === rows.length
   const chosenMessages = expandRows(chosen)
 
-  useEffect(() => { readingPane.current?.scrollTo({ top: 0 }) }, [selectedId, view, contactId, displayMode, conversationOrder])
+  const revealInReader = useCallback((target: HTMLElement, align: 'start' | 'end' | 'auto' = 'auto') => {
+    const reader = readingPane.current
+    if (!reader) return
+    const panel = window.matchMedia('(max-width: 820px)').matches ? reader.parentElement! : reader
+    const bounds = panel.getBoundingClientRect(), rect = target.getBoundingClientRect()
+    const header = reader.querySelector('.reading-context')?.getBoundingClientRect().height ?? 0
+    const available = panel.clientHeight - header - 16
+    // Scroll only the visible reading surface; never move the fixed workspace.
+    const offset = align === 'end' || (align === 'auto' && rect.height <= available) ? rect.bottom - bounds.bottom + 12 : rect.top - bounds.top - header - 8
+    panel.scrollTo({ top: panel.scrollTop + offset })
+  }, [])
+
+  const revealConversation = useCallback((order = conversationOrder) => {
+    const reader = readingPane.current
+    if (!reader) return
+    if (displayMode === 'messages') {
+      const panel = window.matchMedia('(max-width: 820px)').matches ? reader.parentElement! : reader
+      panel.scrollTo({ top: panel === reader ? 0 : panel.scrollTop + reader.getBoundingClientRect().top - panel.getBoundingClientRect().top })
+      return
+    }
+    const messages = reader.querySelectorAll<HTMLElement>('[data-message-id]')
+    const target = messages.item(order === 'oldest' ? messages.length - 1 : 0)
+    if (target) revealInReader(target, order === 'oldest' ? 'end' : 'start')
+  }, [displayMode, conversationOrder, revealInReader])
+
+  useEffect(() => {
+    if (!storageReady) return
+    const frame = requestAnimationFrame(() => {
+      if (view === 'mail' && !window.matchMedia('(max-width: 820px)').matches) revealConversation()
+      else readingPane.current?.scrollTo({ top: 0 })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [selectedId, view, contactId, storageReady, revealConversation])
+
+  const revealComposer = useCallback((element: HTMLElement) => {
+    element.querySelector<HTMLElement>('#reply')?.focus({ preventScroll: true })
+    revealInReader(element)
+  }, [revealInReader])
+
+  function toggleContact() {
+    if (!save({ ...localRef.current, contactCollapsed: !contactCollapsed })) return
+    const mobile = window.matchMedia('(max-width: 820px)').matches
+    if (mobile && contactCollapsed) contactReturnScroll.current = readingPane.current?.parentElement?.scrollTop ?? 0
+    requestAnimationFrame(() => {
+      if (contactCollapsed && mobile) {
+        const panel = readingPane.current?.parentElement, profile = document.getElementById('contact-profile')
+        if (panel && profile) panel.scrollTo({ top: panel.scrollTop + profile.getBoundingClientRect().top - panel.getBoundingClientRect().top })
+        profile?.focus({ preventScroll: true })
+      } else {
+        if (mobile && contactReturnScroll.current !== null) readingPane.current?.parentElement?.scrollTo({ top: contactReturnScroll.current })
+        document.querySelector<HTMLElement>('.contact-toggle')?.focus({ preventScroll: true })
+      }
+    })
+  }
 
   function expandRows(ids: string[]) {
     return [...new Set(ids.flatMap((id) => {
@@ -303,17 +364,16 @@ function MailboxPage() {
     setComposerOpen(false)
     setNotice('')
     void changeConversations(expandRows([id]), { unread: false }, false)
-    if (reveal && window.matchMedia('(max-width: 820px)').matches) requestAnimationFrame(() => readingPane.current?.scrollIntoView({ block: 'start' }))
+    if (reveal) requestAnimationFrame(() => revealConversation())
     return true
   }
 
   function beginReply(id = conversation.id) {
-    if (composerOpen && id === selectedId) { document.getElementById('reply')?.focus(); return }
+    if (composerOpen && id === selectedId) { const shell = readingPane.current?.querySelector<HTMLElement>('.composer-shell'); if (shell) revealComposer(shell); return }
     if (id !== selectedId && !openConversation(id)) return
     setDraft(richDraft(local.drafts[id]))
     setComposerOpen(true)
     setNotice('')
-    requestAnimationFrame(() => document.getElementById('reply')?.focus())
   }
 
   async function send(mail: ComposedMail) {
@@ -336,7 +396,16 @@ function MailboxPage() {
         await deleteDraftFiles(`${storageKey}:${targetId}`).catch(() => {})
         setNotice(t(result.sentCopy ? "Réponse acceptée par le serveur SMTP." : "Réponse acceptée par SMTP ; copie dans Envoyés non confirmée. Ne renvoyez pas le mail."))
       } else setNotice(t(result.error ?? "Envoi non confirmé. Le brouillon est conservé ; vérifiez Envoyés avant de réessayer."))
-      await refreshMailbox(false).catch(() => { setConversationFailed(true); setConversationFeedback(t("Actualisation impossible. Vos données restent affichées.")) })
+      await refreshMailbox(false).then(fresh => {
+        const sent = fresh.conversations.find(item => item.id === `sent_${requestId}`)
+        if (result.ok && sent && currentConversation.current === targetId) {
+          setSelectedId(sent.id)
+          requestAnimationFrame(() => {
+            const message = [...(readingPane.current?.querySelectorAll<HTMLElement>('[data-message-id]') ?? [])].find(element => element.dataset.messageId === sent.id)
+            if (message) revealInReader(message)
+          })
+        }
+      }).catch(() => { setConversationFailed(true); setConversationFeedback(t("Actualisation impossible. Vos données restent affichées.")) })
     } catch { setNotice(t("Envoi non confirmé. Le brouillon est conservé ; vérifiez Envoyés avant de réessayer.")) }
     finally { setSendBusy(false) }
   }
@@ -451,7 +520,7 @@ function MailboxPage() {
         <div className="demo-banner"><Icon name="info" /><span>{t(mailbox.connection ? "Boîte IMAP connectée · réponses SMTP protégées contre les doublons. Notes et brouillons restent dans ce navigateur." : "Dossiers, classement, labels et suivi partagés avec l’équipe. Aucune boîte mail connectée ; notes et brouillons restent locaux dans cette démo.")}{mailbox.connection?.error ? ` ${t("La dernière relève a échoué ; les mails en cache sont conservés.")}` : ''}</span></div>
         {error ? <div role="alert" className="error-banner">{error}</div> : null}
         {conversationFeedback ? <div role={conversationFailed ? 'alert' : 'status'} className={`conversation-feedback ${conversationFailed ? 'failed' : ''}`}>{conversationFeedback}</div> : null}
-        {view === 'settings' ? <Suspense fallback={<p>{t('Chargement…')}</p>}><AuthoringPage tab={settingsTab} onTab={setSettingsTab} onUpdated={() => { void refreshMailbox(false) }} /></Suspense> : <div className="content-grid">
+        {view === 'settings' ? <Suspense fallback={<p>{t('Chargement…')}</p>}><AuthoringPage tab={settingsTab} onTab={setSettingsTab} onUpdated={() => { void refreshMailbox(false) }} /></Suspense> : <div className="content-grid" data-contact-collapsed={contactCollapsed}>
           <section className="conversation-list" aria-label={view === 'contacts' ? t("Liste des contacts") : t("Liste des conversations")} onKeyDown={(event) => {
             if (view !== 'mail' || (event.target as HTMLElement).closest('textarea, select, input:not([type="checkbox"])')) return
             if (event.key === 'Escape') clearSelection()
@@ -464,7 +533,14 @@ function MailboxPage() {
               <label className="display-mode"><span>{t("Affichage")}</span><select aria-label={t("Mode d’affichage")} value={displayMode} disabled={!storageReady} onChange={(event) => {
                 const next = event.target.value === 'threads' ? 'threads' : 'messages'
                 const drafts = composerOpen ? { ...local.drafts, [conversation.id]: draft } : local.drafts
-                if (save({ ...local, drafts, displayMode: next })) { clearSelection(); setNotice(''); if (next === 'threads') void changeConversations(mailbox.conversations.filter((item) => threadKey(item) === threadKey(conversation)).map((item) => item.id), { unread: false }, false) }
+                if (save({ ...local, drafts, displayMode: next })) {
+                  clearSelection(); setNotice('')
+                  if (next === 'threads') {
+                    const messages = mailbox.conversations.filter(item => threadKey(item) === threadKey(conversation)).sort((a, b) => compareMessages(a, b, 'oldest'))
+                    if (!composerOpen) setSelectedId(messages.at(-1)!.id)
+                    void changeConversations(messages.map(item => item.id), { unread: false }, false)
+                  }
+                }
               }}><option value="messages">{t("Tous les mails")}</option><option value="threads">{t("Conversations")}</option></select></label>
               <label className="mail-order"><span>{t("Ordre")}</span><select aria-label={t("Ordre de la liste")} value={listOrder} disabled={!storageReady} onChange={(event) => {
                 const drafts = composerOpen ? { ...local.drafts, [conversation.id]: draft } : local.drafts
@@ -520,27 +596,29 @@ function MailboxPage() {
 
           <section className="reading-pane" ref={readingPane} tabIndex={0} aria-label={view === 'mail' ? t("Conversation sélectionnée") : t("Historique du contact")}>
             {view === 'mail' ? showConversation ? <>
+              <header className="reading-context"><div><strong title={displayMode === 'threads' ? threadSubject : conversation.subject}>{displayMode === 'threads' ? threadSubject : conversation.subject}</strong><small title={participants.map(person => person.name).join(', ')}>{projectPath(mailbox.projects, project.id)} · {participants.map(person => person.name).join(', ') || replyContact.name}</small></div><span className={`status ${conversation.status}`}>{t(statuses[conversation.status])}</span><button className="icon-button" title={t('Préparer une réponse')} aria-label={t('Préparer une réponse')} onClick={() => beginReply()} disabled={conversation.outgoing}><Icon name="reply" /></button><button className="icon-button contact-toggle" aria-controls="contact-profile" aria-expanded={!contactCollapsed} aria-label={t(contactCollapsed ? 'Afficher la fiche contact' : 'Masquer la fiche contact')} title={t(contactCollapsed ? 'Afficher la fiche contact' : 'Masquer la fiche contact')} disabled={!storageReady} onClick={toggleContact}><Icon name="users" /></button></header>
               <div className="reading-toolbar"><ConversationActions unread={threadMessages.some((item) => item.unread)} status={conversation.status} disabled={stateBusy} onChange={(patch) => changeConversations(readingIds, patch)} /><LabelPicker labels={mailbox.labels ?? []} conversations={threadMessages} disabled={stateBusy} onChange={(patch) => changeConversations(readingIds, patch)} /><AssignmentPicker members={mailbox.members ?? []} currentId={mailbox.currentMemberId} conversations={threadMessages} disabled={stateBusy} onChange={(patch) => changeConversations(readingIds, patch)} /></div>
               <div className="message-heading"><span className="eyebrow">{projectPath(mailbox.projects, project.id)}</span><h2>{displayMode === 'threads' ? threadSubject : conversation.subject}</h2><p>{t("Un échange avec")} {participants.map((person) => person.name).join(', ') || replyContact.name}</p>
                 {displayMode === 'threads' ? <div className="thread-options"><span>{t("{0} mails dans ce fil", threadMessages.length)}</span><label className="mail-order"><span>{t("Ordre")}</span><select aria-label={t("Ordre des messages du fil")} value={conversationOrder} disabled={!storageReady} onChange={(event) => {
                   const drafts = composerOpen ? { ...local.drafts, [conversation.id]: draft } : local.drafts
-                  save({ ...local, drafts, conversationOrder: event.target.value === 'oldest' ? 'oldest' : 'newest' })
+                  const order = event.target.value === 'oldest' ? 'oldest' : 'newest'
+                  if (save({ ...local, drafts, conversationOrder: order })) requestAnimationFrame(() => revealConversation(order))
                 }}><option value="newest">{t("Plus récent")}</option><option value="oldest">{t("Plus ancien")}</option></select></label></div> : null}
               </div>
               {threadMessages.map((message) => {
                 const sender = message.sender ?? mailbox.contacts.find((item) => item.id === message.contactId)!
                 const header = <><span className="contact-avatar">{initials(sender.name)}</span><div><strong>{sender.name}</strong><small>{sender.email}</small></div><time dateTime={message.sentAt} title={message.sentAt ? new Date(message.sentAt).toLocaleString(locale === 'en' ? 'en-GB' : 'fr-FR') : undefined}>{t(message.time)}</time></>
                 const body = <><div className="message-body">{message.body}</div><button className="message-reply secondary-button" disabled={message.outgoing} onClick={() => beginReply(message.id)}><Icon name="reply" />{t("Répondre à ce mail")}</button></>
-                return displayMode === 'threads' ? <details className="message thread-message" key={message.id} data-message-id={message.id} open={message.id === selectedId}><summary>{header}<Icon name="chevron" /></summary>{body}</details> : <article className="message" key={message.id} data-message-id={message.id}><header>{header}</header>{body}</article>
+                return displayMode === 'threads' ? <details className="message thread-message" key={message.id} data-message-id={message.id} open={message.id === selectedId || message.id === threadMessages[conversationOrder === 'oldest' ? threadMessages.length - 1 : 0]?.id}><summary>{header}<Icon name="chevron" /></summary>{body}</details> : <article className="message" key={message.id} data-message-id={message.id}><header>{header}</header>{body}</article>
               })}
-              {composerOpen ? <Suspense fallback={<p>{t('Chargement de l’éditeur…')}</p>}><MailComposer key={`${conversation.id}:${storageKey}`} draft={draft} onChange={setDraft} recipient={replyContact} subject={conversation.subject} storageKey={`${storageKey}:${conversation.id}`} busy={sendBusy} feedback={notice} saved={JSON.stringify(richDraft(local.drafts[conversation.id])) === JSON.stringify(draft)} sendDisabled={!mailbox.connection || !storageReady || stateBusy || !!delivery || !!conversation.outgoing} sendHint={t(!mailbox.connection ? 'Connectez une boîte mail pour envoyer.' : delivery ? delivery.status === 'sent' ? 'Une réponse a déjà été envoyée à ce mail.' : 'Envoi en cours ou incertain : vérifiez Envoyés, ne renvoyez pas.' : 'Le brouillon sera sauvegardé avant l’envoi.')} onSave={() => { if (save({ ...localRef.current, drafts: { ...localRef.current.drafts, [conversation.id]: draft } })) setNotice(t('Brouillon enregistré dans ce navigateur. Aucun email envoyé.')) }} onFilesBusy={setComposerFilesBusy} onSend={mail => void send(mail)} /></Suspense> : <div className="reply-bar"><span>{local.drafts[conversation.id] ? t("Brouillon enregistré") : t("Aucune réponse préparée")}</span><button className="primary-button" onClick={() => beginReply()}><Icon name="reply" />{local.drafts[conversation.id] ? t("Reprendre le brouillon") : t("Préparer une réponse")}</button></div>}
+              {composerOpen ? <Suspense fallback={<p>{t('Chargement de l’éditeur…')}</p>}><MailComposer key={`${conversation.id}:${storageKey}`} draft={draft} onReady={revealComposer} onChange={setDraft} recipient={replyContact} subject={conversation.subject} storageKey={`${storageKey}:${conversation.id}`} busy={sendBusy} feedback={notice} saved={JSON.stringify(richDraft(local.drafts[conversation.id])) === JSON.stringify(draft)} sendDisabled={!mailbox.connection || !storageReady || stateBusy || !!delivery || !!conversation.outgoing} sendHint={t(!mailbox.connection ? 'Connectez une boîte mail pour envoyer.' : delivery ? delivery.status === 'sent' ? 'Une réponse a déjà été envoyée à ce mail.' : 'Envoi en cours ou incertain : vérifiez Envoyés, ne renvoyez pas.' : 'Le brouillon sera sauvegardé avant l’envoi.')} onSave={() => { if (save({ ...localRef.current, drafts: { ...localRef.current.drafts, [conversation.id]: draft } })) setNotice(t('Brouillon enregistré dans ce navigateur. Aucun email envoyé.')) }} onFilesBusy={setComposerFilesBusy} onSend={mail => void send(mail)} /></Suspense> : <div className="reply-bar"><span>{conversation.outgoing ? t("Message envoyé") : local.drafts[conversation.id] ? t("Brouillon enregistré") : t("Aucune réponse préparée")}</span><button className="primary-button" disabled={conversation.outgoing} onClick={() => beginReply()}><Icon name="reply" />{local.drafts[conversation.id] ? t("Reprendre le brouillon") : t("Préparer une réponse")}</button></div>}
               <ConversationActivity key={conversation.id} ids={readingIds} version={readingIds.map((id) => latestStates.current.find((item) => item.id === id)?.revision).join(",") + JSON.stringify(mailbox.deliveries ?? [])} />
             </> : <div className="empty-folder"><span className="empty-folder-icon" style={{ color: projectColor(selectedProject?.color ?? 'slate') }}><Icon name="folder" /></span><span className="eyebrow">{selectedProject ? projectPath(mailbox.projects, selectedProject.id) : t("Dossier indisponible")}</span><h2>{t("Ce dossier est vide")}</h2><p>{t("Déposez des conversations dans ce dossier ou utilisez « Déplacer vers un projet » depuis la boîte de réception.")}</p></div> : <div className="contact-history"><span className="eyebrow">{t("Historique des échanges")}</span><h2>{t("Les échanges avec")} {contact.name.split(' ')[0]}</h2><p>{t("Tous les projets et conversations associés à ce contact.")}</p>{mailbox.conversations.filter((item) => includesContact(item, contact)).map((item) => <button className="history-item" key={item.id} onClick={() => selectProject(item.projectId, item.id)}><span><strong>{item.subject}</strong><small>{mailbox.projects.find((project) => project.id === item.projectId)?.name}</small></span><span className={`status ${item.status}`}>{t(statuses[item.status])}</span></button>)}</div>}
             {notice ? <p role="status" className="notice">{notice}</p> : null}
           </section>
 
-          {(view === 'contacts' && mailbox.contacts.length > 0) || showConversation ? <aside className="contact-panel" tabIndex={0} aria-label={t("Fiche du contact")}>
-            <span className="section-label">{t("Fiche contact")}</span>
+          {(view === 'contacts' && mailbox.contacts.length > 0) || showConversation ? <aside id="contact-profile" className="contact-panel" hidden={contactCollapsed} tabIndex={0} aria-label={t("Fiche du contact")}>
+            <div className="contact-panel-heading"><span className="section-label">{t("Fiche contact")}</span>{view === 'mail' ? <button className="icon-button" aria-label={t("Masquer la fiche contact")} title={t("Masquer la fiche contact")} disabled={!storageReady} onClick={toggleContact}><Icon name="close" /></button> : null}</div>
             {view === 'mail' && participants.length > 1 ? <div className="thread-participants" role="group" aria-label={t("Participants de la conversation")}><h3>{t("Participants")} <span>{participants.length}</span></h3>{participants.map((person) => <button key={person.id} aria-pressed={person.id === contact.id} onClick={() => { setInspectedContact({ threadId: threadKey(conversation), id: person.id }); setNotice('') }}><span className="contact-avatar">{initials(person.name)}</span><span><strong>{person.name}</strong><small>{person.email}</small></span></button>)}</div> : null}
             <div className="profile-avatar">{initials(contact.name)}</div><h2>{contact.name}</h2><p className="company">{contact.company}</p>
             <dl className="contact-details"><dt>{t("Email")}</dt><dd>{contact.email}</dd><dt>{t("Téléphone")}</dt><dd>{contact.phone}</dd></dl>

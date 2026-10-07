@@ -8,8 +8,8 @@ import { Icon } from './icon'
 import { useI18n } from '../lib/i18n'
 
 export type ComposedMail = { text: string; html: string; attachments: MailAttachment[] }
-export function MailComposer({ draft, onChange, recipient, subject, storageKey, busy, sendDisabled, sendHint, feedback, saved, onSave, onSend, onFilesBusy }: {
-  draft: RichDraft; onChange(draft: RichDraft): void; recipient: { name: string; email: string }; subject: string; storageKey: string; busy: boolean; sendDisabled: boolean; sendHint: string; feedback: string; saved: boolean; onSave(): void; onSend(mail: ComposedMail): void; onFilesBusy(busy: boolean): void;
+export function MailComposer({ draft, onChange, recipient, subject, storageKey, busy, sendDisabled, sendHint, feedback, saved, onSave, onSend, onFilesBusy, onReady }: {
+  draft: RichDraft; onChange(draft: RichDraft): void; recipient: { name: string; email: string }; subject: string; storageKey: string; busy: boolean; sendDisabled: boolean; sendHint: string; feedback: string; saved: boolean; onSave(): void; onSend(mail: ComposedMail): void; onFilesBusy(busy: boolean): void; onReady(element: HTMLElement): void;
 }) {
   const { t } = useI18n()
   const [settings, setSettings] = useState<AuthoringSettings | null>(null)
@@ -41,6 +41,10 @@ export function MailComposer({ draft, onChange, recipient, subject, storageKey, 
     }).catch(() => { if (active) setError(t('Impossible de charger les signatures ou les fichiers du brouillon. Fermez puis rouvrez pour réessayer.')) })
     return () => { active = false }
   }, [storageKey])
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => { if (dialog.current) onReady(dialog.current) })
+    return () => cancelAnimationFrame(frame)
+  }, [onReady])
   async function updateFiles(next: MailAttachment[]) {
     await saveDraftFiles(storageKey, next)
     setAttachments(next)

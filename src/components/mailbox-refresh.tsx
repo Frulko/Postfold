@@ -2,7 +2,7 @@ import { useI18n } from '../lib/i18n'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from './icon'
 
-export function MailboxRefresh({ onRefresh, connected = false }: { onRefresh: () => Promise<void>; connected?: boolean }) {
+export function MailboxRefresh({ onRefresh, connected = false }: { onRefresh: () => Promise<unknown>; connected?: boolean }) {
   const { t, locale } = useI18n()
   const [automatic, setAutomatic] = useState(true)
   const [busy, setBusy] = useState(false)
