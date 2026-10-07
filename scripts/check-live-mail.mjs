@@ -297,7 +297,7 @@ try {
         await browser('find', 'role', 'button', 'click', '--name', 'Laptop enrollment')
         await browser('snapshot', '-i')
         await browser('find', 'role', 'button', 'click', '--name', 'Reply to this message', '--exact')
-        await browser('snapshot', '-i')
+        await browser('wait', '#reply')
         await browser('find', 'role', 'textbox', 'fill', 'Your laptop enrollment is complete.', '--name', 'Your draft')
         await browser('wait', '--fn', "Array.from(document.querySelectorAll('button')).some(button => button.textContent.trim() === 'Send' && !button.disabled)")
         await browser('screenshot', process.env.MAIL_TEST_SCREENSHOT ?? join(directory, 'live-mail.png'))
