@@ -197,7 +197,9 @@ The unauthenticated request must return **401**. The second command prompts for 
 
 ## Backups and restore
 
-PostgreSQL contains shared folders, label definitions, filing, read flags and workflow states. Notes, drafts and the display preference remain in each browser's localStorage: a database backup does **not** include them. A change of scheme, hostname or port creates a different browser storage origin.
+PostgreSQL contains shared folders, labels, tracking states, assignments, activity, members, templates, signatures, encrypted accounts, SSO sessions, live mail cache and durable send attempts. In live mode it also stores [complete MIME archives](mail-archives.md), including HTML and attachments, which survive external IMAP deletion. Pending or uncertain send attempts retain their generated MIME. Include these tables in database backups and allow for their storage growth.
+
+Notes, drafts and display preferences remain in browser localStorage; draft attachments remain in IndexedDB. A database backup does **not** include them. A change of scheme, hostname or port creates a different browser storage origin. Mail content is not encrypted by the application like credentials: protect database access and backup files.
 
 Create a database backup on the PostgreSQL host:
 

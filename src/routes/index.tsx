@@ -520,7 +520,7 @@ function MailboxPage() {
         <div className="demo-banner"><Icon name="info" /><span>{t(mailbox.connection ? "Boîte IMAP connectée · réponses SMTP protégées contre les doublons. Notes et brouillons restent dans ce navigateur." : "Dossiers, classement, labels et suivi partagés avec l’équipe. Aucune boîte mail connectée ; notes et brouillons restent locaux dans cette démo.")}{mailbox.connection?.error ? ` ${t("La dernière relève a échoué ; les mails en cache sont conservés.")}` : ''}</span></div>
         {error ? <div role="alert" className="error-banner">{error}</div> : null}
         {conversationFeedback ? <div role={conversationFailed ? 'alert' : 'status'} className={`conversation-feedback ${conversationFailed ? 'failed' : ''}`}>{conversationFeedback}</div> : null}
-        {view === 'settings' ? <Suspense fallback={<p>{t('Chargement…')}</p>}><AuthoringPage tab={settingsTab} onTab={setSettingsTab} onUpdated={() => { void refreshMailbox(false) }} /></Suspense> : <div className="content-grid" data-contact-collapsed={contactCollapsed}>
+        {view === 'settings' ? <Suspense fallback={<p>{t('Chargement…')}</p>}><AuthoringPage projects={mailbox.projects} connected={!!mailbox.connection} tab={settingsTab} onTab={setSettingsTab} onUpdated={() => { void refreshMailbox(false) }} /></Suspense> : <div className="content-grid" data-contact-collapsed={contactCollapsed}>
           <section className="conversation-list" aria-label={view === 'contacts' ? t("Liste des contacts") : t("Liste des conversations")} onKeyDown={(event) => {
             if (view !== 'mail' || (event.target as HTMLElement).closest('textarea, select, input:not([type="checkbox"])')) return
             if (event.key === 'Escape') clearSelection()

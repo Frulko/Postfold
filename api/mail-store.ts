@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, HttpException, ServiceUnavailableException } from '@nestjs/common'
+import { BadRequestException, ConflictException, HttpException, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
 import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { ImapFlow, type FetchMessageObject } from 'imapflow'
@@ -10,13 +10,16 @@ import { loadAccount } from './mail-secrets.js'
 import { isMailAddress, isReplyRequest, type MailAccount } from '../shared/mail-account.js'
 import { isConversationUpdate, applyConversationStates } from '../shared/conversation-state.js'
 import { isProjectSettings } from '../shared/projects.js'
-import type { Conversation, ConversationUpdate, DemoMailbox, Member, Project } from '../shared/mailbox.js'
+import type { Conversation, ConversationState, ConversationUpdate, DemoMailbox, Member, Project } from '../shared/mailbox.js'
+import { isArchiveId, isArchiveSearch, isArchiveRestore, type MailArchiveEntry, type MailArchivePage } from '../shared/mail-archive.js'
 
-type CachedMessage = { id: string; path: string; validity: string; uid: number; raw_id: string | null; data: Conversation & { replyTo?: string; references?: string[]; receivedAt?: string } }
+type CachedMessage = { id: string; path: string; validity: string; uid: number; raw_id: string | null; source_sha256?: string | null; data: Conversation & { replyTo?: string; references?: string[]; receivedAt?: string } }
 type Folder = { id: string; path: string }
 const MAX_MIME_BYTES = 16 * 1024 * 1024 // Includes base64 MIME overhead for a 10 MiB attachment.
 const hash = (value: string) => createHash('sha256').update(value).digest('hex').slice(0, 24)
+const sourceHash = (value: Buffer) => createHash('sha256').update(value).digest('hex')
 const emptyMailbox = { projects: [{ id: 'inbox', name: 'INBOX', color: 'blue', code: null }], contacts: [], conversations: [] }
+const stateSnapshot = "jsonb_build_object('id',s.id,'revision',s.revision,'unread',s.unread,'status',s.status,'projectId',s.project_id,'labelIds',s.label_ids,'assigneeId',s.assignee_id)"
 const slot = (path: string, validity: string, uid: number) => JSON.stringify([path, validity, uid])
 const folderName = (project: Project) => project.parentId || project.code === null ? project.name : `${project.code ?? project.id} - ${project.name}`
 
@@ -51,6 +54,104 @@ export class MailStore extends ProjectStore {
       status text NOT NULL CHECK (status IN ('sending', 'sent', 'uncertain')), sent_copy boolean NOT NULL DEFAULT false,
       data jsonb NOT NULL, PRIMARY KEY (mailbox_id, request_id), UNIQUE (mailbox_id, reply_key)
     )`)
+    await this.pool.query('ALTER TABLE mail_messages ADD COLUMN IF NOT EXISTS source_sha256 text')
+    await this.pool.query('ALTER TABLE mail_sends ADD COLUMN IF NOT EXISTS source bytea')
+    await this.pool.query('CREATE INDEX IF NOT EXISTS mail_messages_source ON mail_messages (mailbox_id,source_sha256)')
+    // ponytail: bounded MIME blobs stay in PostgreSQL; move blobs to object storage if archive size dominates backups.
+    await this.pool.query(`CREATE TABLE IF NOT EXISTS mail_archives (
+      mailbox_id text NOT NULL REFERENCES demo_project_settings(mailbox_id) ON DELETE CASCADE,
+      id uuid NOT NULL, message_id text NOT NULL, sha256 text NOT NULL, source bytea NOT NULL,
+      data jsonb NOT NULL, snapshot jsonb NOT NULL, last_path text NOT NULL, flags text[] NOT NULL,
+      internal_date timestamptz NOT NULL, size_bytes integer NOT NULL CHECK (size_bytes > 0 AND size_bytes <= 16777216),
+      archived_at timestamptz NOT NULL DEFAULT now(), last_seen_at timestamptz NOT NULL DEFAULT now(), missing_since timestamptz,
+      restore_status text CHECK (restore_status IN ('sending','sent','uncertain')), restore_request_id uuid,
+      PRIMARY KEY (mailbox_id,id), UNIQUE (mailbox_id,message_id,sha256)
+    )`)
+    await this.pool.query('CREATE INDEX IF NOT EXISTS mail_archives_page ON mail_archives (mailbox_id,archived_at DESC,id DESC)')
+    await this.pool.query('CREATE INDEX IF NOT EXISTS mail_archives_source ON mail_archives (mailbox_id,sha256)')
+  }
+
+  private async archiveMessage(message: CachedMessage, source: Buffer, flags: string[], internalDate: Date, snapshot?: ConversationState) {
+    if (!source.length || source.length > MAX_MIME_BYTES) throw new BadRequestException('Message exceeds the archive size limit.')
+    const state = snapshot ?? { id: message.id, revision: 0, unread: message.data.unread, status: message.data.status,
+      projectId: message.data.projectId, labelIds: message.data.labelIds ?? [], assigneeId: message.data.assigneeId ?? null }
+    const sha = sourceHash(source)
+    await this.pool.query(`INSERT INTO mail_archives (mailbox_id,id,message_id,sha256,source,data,snapshot,last_path,flags,internal_date,size_bytes)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (mailbox_id,message_id,sha256) DO UPDATE
+      SET last_seen_at=now(),missing_since=NULL,restore_status=NULL,flags=EXCLUDED.flags,last_path=EXCLUDED.last_path`,
+    [this.mailboxId, randomUUID(), message.id, sha, source, message.data, state, message.path, flags, internalDate, source.length])
+    return sha
+  }
+
+  async archives(input: unknown): Promise<MailArchivePage> {
+    if (!isArchiveSearch(input)) throw new BadRequestException('Invalid archive search.')
+    const { rows: stats } = await this.pool.query(`SELECT count(*)::integer AS messages, COALESCE(sum(size_bytes),0)::float8 AS bytes,
+      count(*) FILTER (WHERE missing_since IS NOT NULL)::integer AS missing,
+      (SELECT count(*)::integer FROM mail_messages WHERE mailbox_id=$1 AND source_sha256 IS NULL) AS "cachedWithoutSource"
+      FROM mail_archives WHERE mailbox_id=$1`, [this.mailboxId])
+    const { rows } = await this.pool.query<MailArchiveEntry>(`SELECT id,message_id AS "messageId",data->>'subject' AS subject,
+      data->'sender' AS sender,data->>'preview' AS preview,data->>'sentAt' AS "sentAt",archived_at AS "archivedAt",
+      missing_since AS "missingSince",last_path AS "lastPath",size_bytes AS bytes,snapshot,restore_status AS "restoreStatus"
+      FROM mail_archives a WHERE mailbox_id=$1 AND (NOT $2::boolean OR missing_since IS NOT NULL)
+      AND strpos(lower(COALESCE(data->>'subject','') || ' ' || COALESCE(data->'sender'->>'email','') || ' ' || COALESCE(data->'sender'->>'name','') || ' ' || last_path),lower($3))>0
+      AND ($4::uuid IS NULL OR (archived_at,id)<(SELECT archived_at,id FROM mail_archives WHERE mailbox_id=$1 AND id=$4::uuid))
+      ORDER BY archived_at DESC,id DESC LIMIT 51`, [this.mailboxId, input.missingOnly, input.query.trim(), input.cursor ?? null])
+    const items = rows.slice(0, 50)
+    return { items, nextCursor: rows.length > 50 ? items.at(-1)!.id : null, stats: stats[0] }
+  }
+
+  private async archivedMessage(id: unknown) {
+    if (!isArchiveId(id)) throw new BadRequestException('Invalid archive ID.')
+    const { rows } = await this.pool.query<{ id: string; message_id: string; sha256: string; source: Buffer; data: CachedMessage['data']; snapshot: ConversationState; flags: string[]; internal_date: Date; missing_since: Date | null; restore_status: string | null }>(
+      'SELECT * FROM mail_archives WHERE mailbox_id=$1 AND id=$2', [this.mailboxId, id])
+    const item = rows[0]
+    if (!item) throw new NotFoundException('Archived message not found.')
+    if (sourceHash(item.source) !== item.sha256) throw new ServiceUnavailableException('Archive integrity check failed. The stored copy was preserved.')
+    return item
+  }
+
+  async archiveSource(id: unknown) { return (await this.archivedMessage(id)).source }
+
+  async restoreArchive(input: unknown, actor?: Member) {
+    if (!isArchiveRestore(input)) throw new BadRequestException('Invalid archive restoration.')
+    if (actor) await this.members(actor)
+    return this.exclusive(async () => {
+      const client = this.imap()
+      try {
+        await client.connect()
+        if (!(await this.importMailbox(client)).complete) throw new ConflictException('Finish fetching the mailbox before restoring an archive.')
+        const item = await this.archivedMessage(input.id)
+        const present = await this.pool.query('SELECT 1 FROM mail_messages WHERE mailbox_id=$1 AND source_sha256=$2 LIMIT 1', [this.mailboxId,item.sha256])
+        if (!item.missing_since || present.rowCount) throw new ConflictException('This message is already present in IMAP. No copy was added.')
+        if (item.restore_status) throw new ConflictException('Restoration is already in progress or unconfirmed. Inspect the mailbox before retrying.')
+        const { rows: folders } = await this.pool.query<Folder>('SELECT id,path FROM mail_folders WHERE mailbox_id=$1 AND id=$2', [this.mailboxId, input.folderId])
+        if (!folders[0]) throw new BadRequestException('Choose an existing IMAP folder.')
+        const requestId = randomUUID()
+        const reserved = await this.pool.query(`WITH reserved AS (
+          UPDATE mail_archives SET restore_status='sending',restore_request_id=$3 WHERE mailbox_id=$1 AND id=$2 AND restore_status IS NULL RETURNING id
+        ) INSERT INTO postfold_activity (mailbox_id,id,conversation_id,actor,kind,data)
+          SELECT $1,$3,$4,$5::jsonb,'updated',jsonb_build_object('restoredFromArchive',id,'status','sending') FROM reserved`,
+        [this.mailboxId, item.id, requestId, item.message_id, actor ? JSON.stringify({ id: actor.id, name: actor.name }) : null])
+        if (reserved.rowCount !== 1) throw new ConflictException('Restoration is already in progress.')
+        const finish = (status: 'sent' | 'uncertain') => this.pool.query(`WITH changed AS (
+          UPDATE mail_archives SET restore_status=$3 WHERE mailbox_id=$1 AND id=$2 RETURNING restore_request_id
+        ) UPDATE postfold_activity SET data=jsonb_set(data,'{status}',to_jsonb($3::text))
+          WHERE mailbox_id=$1 AND id IN (SELECT restore_request_id FROM changed)`, [this.mailboxId, item.id, status])
+        try {
+          const flags = item.flags.filter(flag => ['\\Answered', '\\Flagged', '\\Draft'].includes(flag))
+          if (!item.snapshot.unread) flags.push('\\Seen')
+          if (!await client.append(folders[0].path, item.source, flags, item.internal_date)) throw new Error('APPEND was not acknowledged')
+        } catch {
+          await finish('uncertain')
+          throw new ServiceUnavailableException('Restoration could not be confirmed. The archive is safe; inspect IMAP before retrying.')
+        }
+        await finish('sent')
+        // An acknowledged APPEND must never become a request to append again after a read failure.
+        let synchronized = true
+        try { await this.importMailbox(client,item) } catch { synchronized = false; this.syncError = true }
+        return { id: item.message_id, synchronized }
+      } finally { await client.logout().catch(() => client.close()) }
+    })
   }
 
   startPolling() {
@@ -139,7 +240,7 @@ export class MailStore extends ProjectStore {
     return this.mailbox()
   }
 
-  private async importMailbox(client: ImapFlow) {
+  private async importMailbox(client: ImapFlow, restoration?: { message_id: string; sha256: string; snapshot: ConversationState; data: CachedMessage['data'] }) {
     let listed = await client.list()
     if (this.account.saveSent && !listed.some((item) => item.path === this.account.sentPath)) {
       await client.mailboxCreate(this.account.sentPath)
@@ -149,6 +250,10 @@ export class MailStore extends ProjectStore {
     const oldSettings = await this.read()
     const { rows: oldFolders } = await this.pool.query<Folder>('SELECT id, path FROM mail_folders WHERE mailbox_id = $1', [this.mailboxId])
     const { rows: oldMessages } = await this.pool.query<CachedMessage>('SELECT * FROM mail_messages WHERE mailbox_id = $1', [this.mailboxId])
+    const currentStates = new Map((await this.readConversationStates()).map(state => [state.id, state]))
+    const restoredStates = new Map<string, ConversationState>()
+    const claimedArchiveIds = new Set<string>()
+    let restorationClaimed = false
     const { rows: sent } = await this.pool.query<{ data: Conversation }>("SELECT data FROM mail_sends WHERE mailbox_id = $1 AND status = 'sent'", [this.mailboxId])
     const bySlot = new Map(oldMessages.map((row) => [slot(row.path, row.validity, Number(row.uid)), row]))
     const assignedIds = new Set(['inbox', ...oldFolders.map((folder) => folder.id.toLowerCase())])
@@ -180,12 +285,13 @@ export class MailStore extends ProjectStore {
         }
       } finally { lock.release() }
     }
-    const liveSlots = new Set(inventory.map((item) => slot(item.path, item.validity, item.message.uid)))
+    const indexedInventory = new Map(inventory.map(item => [slot(item.path,item.validity,item.message.uid),item]))
+    const liveSlots = new Set(indexedInventory.keys())
     const staged: CachedMessage[] = []
     let importPending = false
     for (const { folder, id } of folders) {
       const items = inventory.filter((item) => item.path === folder.path)
-      const uncached = items.filter((item) => !bySlot.has(slot(item.path, item.validity, item.message.uid)) && (item.message.size ?? 0) <= MAX_MIME_BYTES)
+      const uncached = items.filter((item) => !bySlot.get(slot(item.path, item.validity, item.message.uid))?.source_sha256 && (item.message.size ?? 0) <= MAX_MIME_BYTES)
       const missing = uncached.slice(-this.limit)
       importPending ||= uncached.length > missing.length
       const raw = new Map<number, Buffer>()
@@ -201,11 +307,17 @@ export class MailStore extends ProjectStore {
       for (const item of items) {
         const previous = bySlot.get(slot(item.path, item.validity, item.message.uid))
         const unread = !item.message.flags?.has('\\Seen')
-        if (previous) { staged.push({ ...previous, data: { ...previous.data, unread, projectId: id } }); continue }
+        if (previous && (previous.source_sha256 || !missing.includes(item))) { staged.push({ ...previous, data: { ...previous.data, unread, projectId: id } }); continue }
         if (!missing.includes(item)) continue
         const source = raw.get(item.message.uid)
         // Oversized MIME messages are not downloaded; importing them later cannot consume unbounded RAM.
-        if (!source) continue
+        if (!source) { if (previous) staged.push(previous); continue }
+        const sha = sourceHash(source)
+        const restoring = !restorationClaimed && restoration?.sha256 === sha ? restoration : undefined
+        const { rows: archived } = await this.pool.query<{ message_id: string; snapshot: ConversationState; data: CachedMessage['data'] }>(`SELECT message_id,snapshot,data FROM mail_archives a
+          WHERE mailbox_id=$1 AND sha256=$2 AND NOT (message_id=ANY($3::text[]))
+          AND NOT EXISTS (SELECT 1 FROM mail_messages m WHERE m.mailbox_id=a.mailbox_id AND m.id=a.message_id)
+          ORDER BY (restore_status IS NOT NULL) DESC,last_seen_at DESC,id DESC LIMIT 1`, [this.mailboxId, sha, [...claimedArchiveIds]])
         const parsed = await simpleParser(source, { skipTextToHtml: true })
         const sender = parsed.from?.value[0]
         const outgoing = sender?.address?.toLowerCase() === this.account.email.toLowerCase()
@@ -224,14 +336,20 @@ export class MailStore extends ProjectStore {
         const body = parsed.text ?? ''
         const sentCopy = rawId && outgoing ? sent.find((item) => item.data.messageId === rawId)?.data : undefined
         const sentId = sentCopy && !staged.some((row) => row.id === sentCopy.id) && !oldMessages.some((row) => row.id === sentCopy.id && liveSlots.has(slot(row.path, row.validity, Number(row.uid)))) ? sentCopy.id : undefined
-        const data: CachedMessage['data'] = { id: sentId ?? (moved.length === 1 ? moved[0].id : randomUUID()), projectId: id, contactId: `c_${hash(email.toLowerCase())}`,
-          threadId: sentCopy?.threadId ?? hash(references[0] ?? parsed.inReplyTo ?? rawId ?? randomUUID()), sentAt,
+        const restoredId = restoring && !oldMessages.some(row => row.id === restoring.message_id && liveSlots.has(slot(row.path,row.validity,Number(row.uid)))) ? restoring.message_id : undefined
+        const data: CachedMessage['data'] = { id: previous?.id ?? sentId ?? restoredId ?? (moved.length === 1 ? moved[0].id : archived[0]?.message_id ?? randomUUID()), projectId: id, contactId: `c_${hash(email.toLowerCase())}`,
+          threadId: sentCopy?.threadId ?? previous?.data.threadId ?? restoring?.data.threadId ?? archived[0]?.data.threadId ?? hash(references[0] ?? parsed.inReplyTo ?? rawId ?? randomUUID()), sentAt,
           sender: { name: sender?.name || sender?.address || 'Unknown sender', email: sender?.address ?? '' },
           participants,
           subject: parsed.subject ?? '(No subject)', preview: body.replace(/\s+/g, ' ').slice(0, 200), body,
           time: sentAt.slice(0, 10), status: outgoing ? 'waiting' : 'open', assignee: null, unread, labelIds: [], outgoing, imapReady: true, replyTo: email, references,
           receivedAt: new Date(item.message.internalDate || date).toISOString(), ...(rawId ? { messageId: rawId } : {}) }
-        staged.push({ id: data.id, path: item.path, validity: item.validity, uid: item.message.uid, raw_id: rawId, data })
+        if (restoring) { restorationClaimed = true; restoredStates.set(data.id,restoring.snapshot) }
+        else if (archived[0]?.message_id === data.id) restoredStates.set(data.id, archived[0].snapshot)
+        claimedArchiveIds.add(data.id)
+        const row = { id: data.id, path: item.path, validity: item.validity, uid: item.message.uid, raw_id: rawId, data, source_sha256: sha }
+        await this.archiveMessage(row, source, [...(item.message.flags ?? [])], new Date(item.message.internalDate || date), currentStates.get(data.id) ?? restoredStates.get(data.id))
+        staged.push(row)
       }
     }
     if (importPending) {
@@ -252,21 +370,42 @@ export class MailStore extends ProjectStore {
       await transaction.query('DELETE FROM mail_folders WHERE mailbox_id = $1', [this.mailboxId])
       for (const { folder, id } of folders) await transaction.query('INSERT INTO mail_folders (mailbox_id, id, path) VALUES ($1, $2, $3)', [this.mailboxId, id, folder.path])
       const keep = staged.map((row) => row.id)
+      // Save the latest annotations before removing active cache rows. Sync never deletes archive bytes.
+      await transaction.query(`UPDATE mail_archives a SET snapshot=${stateSnapshot},data=m.data,last_path=m.path
+        FROM mail_messages m JOIN demo_conversation_state s ON s.mailbox_id=m.mailbox_id AND s.id=m.id
+        WHERE a.mailbox_id=$1 AND m.mailbox_id=a.mailbox_id AND m.id=a.message_id AND m.source_sha256=a.sha256`, [this.mailboxId])
       await transaction.query('DELETE FROM mail_messages WHERE mailbox_id = $1 AND NOT (id = ANY($2::text[]))', [this.mailboxId, keep])
       await transaction.query('DELETE FROM demo_conversation_state WHERE mailbox_id = $1 AND NOT (id = ANY($2::text[])) AND id NOT LIKE $3', [this.mailboxId, keep, 'sent_%'])
       for (const row of staged) {
-        await transaction.query(`INSERT INTO mail_messages (mailbox_id, id, path, validity, uid, raw_id, data) VALUES ($1,$2,$3,$4,$5,$6,$7)
-          ON CONFLICT (mailbox_id,id) DO UPDATE SET path=EXCLUDED.path, validity=EXCLUDED.validity, uid=EXCLUDED.uid, raw_id=EXCLUDED.raw_id, data=EXCLUDED.data`,
-        [this.mailboxId, row.id, row.path, row.validity, row.uid, row.raw_id, row.data])
-        await transaction.query(`INSERT INTO demo_conversation_state (mailbox_id,id,unread,status,project_id,label_ids,assignee_id) VALUES ($1,$2,$3,$5,$4,ARRAY[]::text[],
+        await transaction.query(`INSERT INTO mail_messages (mailbox_id, id, path, validity, uid, raw_id, data,source_sha256) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+          ON CONFLICT (mailbox_id,id) DO UPDATE SET path=EXCLUDED.path, validity=EXCLUDED.validity, uid=EXCLUDED.uid, raw_id=EXCLUDED.raw_id, data=EXCLUDED.data,source_sha256=EXCLUDED.source_sha256`,
+        [this.mailboxId, row.id, row.path, row.validity, row.uid, row.raw_id, row.data, row.source_sha256 ?? null])
+        const restored = restoredStates.get(row.id)
+        const labels = (restored?.labelIds ?? []).filter(labelId => settings.labels?.some((label: { id: string }) => label.id === labelId))
+        await transaction.query(`INSERT INTO demo_conversation_state (mailbox_id,id,unread,status,project_id,label_ids,assignee_id,revision) VALUES ($1,$2,$3,$5,$4,$7::text[],COALESCE(
+          (SELECT id FROM postfold_mailbox_members WHERE mailbox_id=$1 AND id=$8 AND active),
           (SELECT s.assignee_id FROM demo_conversation_state s JOIN mail_messages m ON m.mailbox_id=s.mailbox_id AND m.id=s.id
-            WHERE s.mailbox_id=$1 AND s.id<>$2 AND m.data->>'threadId'=$6 ORDER BY COALESCE(m.data->>'receivedAt',m.data->>'sentAt') DESC,m.uid DESC LIMIT 1))
+            WHERE s.mailbox_id=$1 AND s.id<>$2 AND m.data->>'threadId'=$6 ORDER BY COALESCE(m.data->>'receivedAt',m.data->>'sentAt') DESC,m.uid DESC LIMIT 1)),$9)
           ON CONFLICT (mailbox_id,id) DO UPDATE SET unread=EXCLUDED.unread, project_id=EXCLUDED.project_id,
           revision=demo_conversation_state.revision + CASE WHEN demo_conversation_state.unread IS DISTINCT FROM EXCLUDED.unread OR demo_conversation_state.project_id IS DISTINCT FROM EXCLUDED.project_id THEN 1 ELSE 0 END`,
-        [this.mailboxId, row.id, row.data.unread, row.data.projectId, row.data.status, row.data.threadId])
+        [this.mailboxId, row.id, row.data.unread, row.data.projectId, restored?.status ?? row.data.status, row.data.threadId, labels, restored?.assigneeId ?? null, restored ? restored.revision + 1 : 0])
       }
+      await transaction.query(`UPDATE mail_archives a SET snapshot=${stateSnapshot},data=m.data,last_path=m.path,last_seen_at=now(),missing_since=NULL,restore_status=NULL
+        FROM mail_messages m JOIN demo_conversation_state s ON s.mailbox_id=m.mailbox_id AND s.id=m.id
+        WHERE a.mailbox_id=$1 AND m.mailbox_id=a.mailbox_id AND m.id=a.message_id AND m.source_sha256=a.sha256`, [this.mailboxId])
+      const observed = staged.flatMap(row => {
+        const item = indexedInventory.get(slot(row.path,row.validity,Number(row.uid)))
+        return item ? [{ id: row.id, sha: row.source_sha256, flags: [...(item.message.flags ?? [])] }] : []
+      })
+      await transaction.query(`UPDATE mail_archives a SET flags=x.flags FROM jsonb_to_recordset($2::jsonb) AS x(id text,sha text,flags text[])
+        WHERE a.mailbox_id=$1 AND a.message_id=x.id AND a.sha256=x.sha`, [this.mailboxId, JSON.stringify(observed)])
+      await transaction.query(`UPDATE mail_archives a SET missing_since=COALESCE(missing_since,now())
+        WHERE mailbox_id=$1 AND NOT EXISTS (SELECT 1 FROM mail_messages m WHERE m.mailbox_id=a.mailbox_id AND m.source_sha256=a.sha256)`, [this.mailboxId])
+      await transaction.query(`UPDATE mail_archives a SET missing_since=NULL,restore_status=NULL
+        WHERE mailbox_id=$1 AND EXISTS (SELECT 1 FROM mail_messages m WHERE m.mailbox_id=a.mailbox_id AND m.source_sha256=a.sha256)`, [this.mailboxId])
       await transaction.query('COMMIT')
     } catch (error) { await transaction.query('ROLLBACK'); throw error } finally { transaction.release() }
+    return { complete: !importPending }
   }
 
   override async updateConversations(input: unknown, actor?: Member) {
@@ -409,12 +548,13 @@ export class MailStore extends ProjectStore {
         disableFileAccess: true, disableUrlAccess: true,
       })
       const raw = generated.message as Buffer
+      if (raw.length > MAX_MIME_BYTES) throw new BadRequestException('Message exceeds the archive size limit.')
       // The send reservation and its trusted author must be durable before SMTP begins.
       await this.pool.query(`WITH reserved AS (
-        INSERT INTO mail_sends (mailbox_id,request_id,target_id,reply_key,body_hash,status,data) VALUES ($1,$2,$3,$4,$5,'sending',$6) RETURNING request_id
+        INSERT INTO mail_sends (mailbox_id,request_id,target_id,reply_key,body_hash,status,data,source) VALUES ($1,$2,$3,$4,$5,'sending',$6,$8) RETURNING request_id
       ) INSERT INTO postfold_activity (mailbox_id,id,conversation_id,actor,kind,data)
         SELECT $1,request_id,$3,$7::jsonb,'reply','{"status":"sending"}'::jsonb FROM reserved`,
-        [this.mailboxId, input.requestId, input.id, `${message.threadId}:${message.messageId ?? input.id}`, digest, outgoing, actor ? JSON.stringify({ id: actor.id, name: actor.name }) : null])
+        [this.mailboxId, input.requestId, input.id, `${message.threadId}:${message.messageId ?? input.id}`, digest, outgoing, actor ? JSON.stringify({ id: actor.id, name: actor.name }) : null, raw])
       try {
         const delivered = await transport.sendMail({ envelope: { from: this.account.email, to: [message.replyTo] }, raw })
         if (!delivered.accepted?.length) throw new Error('No recipient accepted')
@@ -423,7 +563,9 @@ export class MailStore extends ProjectStore {
           UPDATE postfold_activity SET data=jsonb_set(data,'{status}','"uncertain"') WHERE mailbox_id=$1 AND id IN (SELECT request_id FROM delivery)`, [this.mailboxId, input.requestId])
         throw new ConflictException('Delivery could not be confirmed. Do not resend; inspect Sent and the mail server. Your draft is preserved.')
       }
-      await this.pool.query(`WITH delivery AS (UPDATE mail_sends SET status='sent' WHERE mailbox_id=$1 AND request_id=$2 RETURNING request_id)
+      await this.archiveMessage({ id: outgoing.id, path: this.account.sentPath, validity: '', uid: 0, raw_id: messageId, data: outgoing }, raw, ['\\Seen'], date,
+        { id: outgoing.id, revision: 0, unread: false, status: 'waiting', projectId: message.projectId, labelIds: [], assigneeId: states.find(item => item.id === input.id)?.assigneeId ?? null })
+      await this.pool.query(`WITH delivery AS (UPDATE mail_sends SET status='sent',source=NULL WHERE mailbox_id=$1 AND request_id=$2 RETURNING request_id)
         UPDATE postfold_activity SET data=jsonb_set(data,'{status}','"sent"') WHERE mailbox_id=$1 AND id IN (SELECT request_id FROM delivery)`, [this.mailboxId, input.requestId])
       await this.pool.query("UPDATE demo_conversation_state SET status='waiting', revision=revision+1 WHERE mailbox_id=$1 AND id=$2 AND status<>'waiting'", [this.mailboxId, input.id])
       await this.pool.query(`INSERT INTO demo_conversation_state (mailbox_id,id,unread,status,project_id,label_ids,assignee_id)

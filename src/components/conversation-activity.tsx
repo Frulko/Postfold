@@ -18,6 +18,7 @@ export function ConversationActivity({ ids, version }: { ids: string[]; version:
     return () => { active = false }
   }, [open, selection, version])
   function describe(entry: Activity) {
+    if (entry.data.restoredFromArchive) return [t(entry.data.status === 'sent' ? 'Mail restauré depuis l’archive' : entry.data.status === 'uncertain' ? 'Restauration incertaine — vérifier la boîte IMAP' : 'Restauration depuis l’archive en cours')]
     if (entry.kind === 'reply') return [t(entry.data.status === 'sent' ? "Réponse acceptée par le serveur SMTP" : entry.data.status === 'uncertain' ? "Envoi incertain — vérifier avant de réessayer" : "Tentative d’envoi en cours")]
     const { before, after } = entry.data
     if (!before || !after) return []

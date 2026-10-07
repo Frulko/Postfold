@@ -4,9 +4,11 @@ import type { AuthoringChange, AuthoringSettings, EmailTemplate } from '../../sh
 import { RichEditor, EmailPreview } from './rich-editor'
 import { useI18n } from '../lib/i18n'
 import { Icon } from './icon'
+import { MailArchive } from './mail-archive'
+import type { Project } from '../../shared/mailbox'
 
-export type SettingsTab = 'templates' | 'signatures' | 'team'
-export function AuthoringPage({ tab, onTab, onUpdated }: { tab: SettingsTab; onTab(tab: SettingsTab): void; onUpdated(): void }) {
+export type SettingsTab = 'templates' | 'signatures' | 'team' | 'archives'
+export function AuthoringPage({ tab, onTab, onUpdated, projects, connected }: { tab: SettingsTab; onTab(tab: SettingsTab): void; onUpdated(): void; projects: Project[]; connected: boolean }) {
   const { t, locale } = useI18n()
   const [config, setConfig] = useState<AuthoringSettings | null>(null)
   const [error, setError] = useState('')
@@ -41,13 +43,13 @@ export function AuthoringPage({ tab, onTab, onUpdated }: { tab: SettingsTab; onT
     baseline.current = JSON.stringify([next.name, next.html, next.scope]); setDiscard(false); setRemove(false); setEdit(next)
   }
   function closeEditor() { if (busy || !edit) return; if (baseline.current === JSON.stringify([edit.name, edit.html, edit.scope])) setEdit(null); else setDiscard(true) }
-  const titles = { templates: 'Modèles de mail', signatures: 'Signatures', team: 'Équipe' }
+  const titles = { templates: 'Modèles de mail', signatures: 'Signatures', team: 'Équipe', archives: 'Archives mail' }
   return <section className="settings-page" aria-label={t(titles[tab])}>
-    <div className="settings-heading"><div><span className="eyebrow">{t('Votre espace de travail')}</span><h1>{t(titles[tab])}</h1><p>{t(tab === 'templates' ? 'Des réponses soignées, prêtes à personnaliser.' : tab === 'signatures' ? 'Une identité cohérente pour chaque membre de l’équipe.' : 'Gérez les accès, les rôles et les signatures de votre équipe.')}</p></div><button className="secondary-button" onClick={() => void reload()} disabled={busy}><Icon name="refresh" />{t('Actualiser')}</button></div>
-    <nav className="settings-tabs" aria-label={t('Gestion de la boîte')}>{(['templates', 'signatures', 'team'] as const).map(key => <button className={tab === key ? 'active' : ''} key={key} onClick={() => onTab(key)}>{t(titles[key])}</button>)}</nav>
+    <div className="settings-heading"><div><span className="eyebrow">{t('Votre espace de travail')}</span><h1>{t(titles[tab])}</h1><p>{t(tab === 'archives' ? 'Retrouvez et restaurez les mails conservés par Postfold.' : tab === 'templates' ? 'Des réponses soignées, prêtes à personnaliser.' : tab === 'signatures' ? 'Une identité cohérente pour chaque membre de l’équipe.' : 'Gérez les accès, les rôles et les signatures de votre équipe.')}</p></div>{tab !== 'archives' ? <button className="secondary-button" onClick={() => void reload()} disabled={busy}><Icon name="refresh" />{t('Actualiser')}</button> : null}</div>
+    <nav className="settings-tabs" aria-label={t('Gestion de la boîte')}>{(['templates', 'signatures', 'team', 'archives'] as const).map(key => <button className={tab === key ? 'active' : ''} key={key} onClick={() => onTab(key)}>{t(key === 'archives' ? 'Archives' : titles[key])}</button>)}</nav>
     {error ? <div className="error-banner" role="alert">{error}{edit ? <button className="secondary-button" onClick={() => void reloadKeepingEdits()}>{t('Actualiser sans perdre la saisie')}</button> : null}</div> : null}
     {feedback ? <p className="settings-feedback" role="status">{feedback}</p> : null}
-    {!config ? <p>{t('Chargement…')}</p> : <>
+    {tab === 'archives' ? <MailArchive projects={projects} connected={connected} onUpdated={onUpdated} /> : !config ? <p>{t('Chargement…')}</p> : <>
       {tab === 'team' ? <><div className="team-stats"><article><strong>{config.members.length}</strong><span>{t('Membres')}</span></article><article><strong>{config.members.filter(m => m.active).length}</strong><span>{t('Accès actifs')}</span></article><article><strong>{config.signatures.length}</strong><span>{t('Signatures')}</span></article></div><p className="settings-hint">{t('Les comptes sont créés dans Keycloak. Les membres apparaissent ici après leur première connexion. Désactiver un accès bloque les prochaines requêtes dans Postfold.')}</p>
         {!config.canAdmin ? <p className="settings-hint">{t('La gestion de l’équipe est réservée aux administrateurs.')}</p> : null}
         <div className="team-table-wrap"><table className="team-table"><thead><tr><th>{t('Membre')}</th><th>{t('Rôle')}</th><th>{t('Signature')}</th><th>{t('Accès')}</th><th>{t('Dernière activité')}</th></tr></thead><tbody>{config.members.map(member => {

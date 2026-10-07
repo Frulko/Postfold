@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync, execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
-import { existsSync, mkdtempSync, writeFileSync, rmSync, chmodSync } from 'node:fs'
+import { existsSync, mkdtempSync, writeFileSync, readFileSync, rmSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomBytes, randomUUID, scryptSync } from 'node:crypto'
@@ -24,6 +24,8 @@ let store
 let peer
 let app
 let web
+let browserArchiveId
+let browserArchiveSource
 const command = (name, args) => execFileSync(name, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
 try {
   writeFileSync(join(directory, 'openssl.cnf'), '[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ext\n[dn]\nCN=localhost\n[ext]\nsubjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,digitalSignature,keyEncipherment,keyCertSign\nextendedKeyUsage=serverAuth\n')
@@ -192,6 +194,12 @@ try {
   assert.equal(sentActivity.length, 1, 'Retries and duplicate replies must not create additional send activity')
   assert.equal(sentActivity[0].actor.id, supportActor.id)
   assert.equal(sentActivity[0].data.status, 'sent')
+  assert.equal((await pool.query('SELECT source FROM mail_sends WHERE mailbox_id=$1 AND status=$2',[`imap:${accountId}`,'sent'])).rows[0].source,null, 'Confirmed MIME must be archived before clearing its send spool')
+  const outgoingArchive = (await store.archives({query:'Re: VPN access request',missingOnly:false})).items.find(item=>item.messageId.startsWith('sent_'))
+  assert.ok(outgoingArchive)
+  const archivedReply = await (await import('mailparser')).simpleParser(await store.archiveSource(outgoingArchive.id))
+  assert.ok(archivedReply.html.includes('<strong>VPN access</strong>'))
+  assert.equal(archivedReply.attachments[0].content.toString(),'Update the client, then reconnect.')
   assert.equal(mailbox.conversations.find((item) => item.outgoing).assigneeId, supportActor.id)
   await smtp.sendMail({ from: 'customer@postfold.test', to: account.email, subject: 'Re: VPN access request', text: 'Thanks, I have another question.', messageId: `<${randomUUID()}@postfold.test>`, inReplyTo: originalId, references: [originalId] })
   mailbox = await store.sync()
@@ -221,6 +229,8 @@ try {
   assert.equal(uncertainActivity.length, 1)
   assert.equal(uncertainActivity[0].actor.id, supportActor.id)
   assert.equal(uncertainActivity[0].data.status, 'uncertain')
+  const uncertainMime = (await pool.query('SELECT source FROM mail_sends WHERE mailbox_id=$1 AND request_id=$2',[`imap:${accountId}`,uncertainReply.requestId])).rows[0].source
+  assert.ok(Buffer.isBuffer(uncertainMime) && uncertainMime.includes(Buffer.from('Your MFA has been reset.')), 'Unconfirmed SMTP attempts must retain their complete MIME')
   console.info('Lost SMTP acknowledgement persists uncertainty and blocks retries across instances: passed')
   const nativeTargetId = `<${randomUUID()}@postfold.test>`
   await smtp.sendMail({ from: 'customer@postfold.test', to: account.email, subject: 'Email client setup', text: 'Please configure my email client.', messageId: nativeTargetId })
@@ -241,12 +251,119 @@ try {
   const largeSent = mailbox.conversations.find(item => item.id === `sent_${largeReply.requestId}`)
   assert.equal(largeSent.imapReady, true, 'A sent MIME copy above 10 MiB must still synchronize within the 16 MiB import bound')
   console.info('Large attachment MIME overhead and native Sent synchronization: passed')
+  const recoveryClient = new ImapFlow({ host: 'localhost', port: imapPort, secure: true, auth: { user: 'support', pass: 'test-only-mail-password' }, tls, logger: false })
+  recoveryClient.on('error', () => {})
+  const archiveMessageId = `<${randomUUID()}@postfold.test>`
+  const diagnostic = Buffer.from([0, 1, 127, 128, 255, 42])
+  const archiveDate = new Date('2026-01-02T09:10:11Z')
+  let archivedCopy, expectedSource
+  try {
+    await recoveryClient.connect(); await recoveryClient.mailboxCreate('Recovery scratch')
+    const generated = await nodemailer.createTransport({ streamTransport: true, buffer: true }).sendMail({ from: 'Customer <customer@postfold.test>', to: account.email, subject: 'Archived VPN diagnostics', text: 'Original VPN diagnostics, preserved for recovery.', html: '<p><strong>Original VPN diagnostics</strong>, preserved for recovery.</p>', messageId: archiveMessageId, date: archiveDate, attachments: [{ filename: 'network-report.bin', content: diagnostic }] })
+    await recoveryClient.append('Recovery scratch', generated.message, ['\\Seen', '\\Flagged'], archiveDate)
+    let lock = await recoveryClient.getMailboxLock('Recovery scratch')
+    try { expectedSource = (await recoveryClient.fetchAll('1:*', { source: true }))[0].source } finally { lock.release() }
+    mailbox = await store.sync()
+    const original = mailbox.conversations.find(item => item.messageId === archiveMessageId)
+    await store.updateConversations({ targets: [{ id: original.id, revision: mailbox.conversationStates.find(item => item.id === original.id).revision }], status: 'closed', addLabelIds: ['urgent'], assigneeId: supportActor.id }, supportActor)
+    await store.sync()
+    let archivePage = await store.archives({ query: 'Archived VPN diagnostics', missingOnly: false })
+    assert.equal(archivePage.items.length, 1); archivedCopy = archivePage.items[0]
+    assert.equal(archivedCopy.missingSince, null)
+    assert.deepEqual(await store.archiveSource(archivedCopy.id), expectedSource)
+    await assert.rejects(store.restoreArchive({ id: archivedCopy.id, folderId: 'inbox' }, supportActor), /already present/)
+    // An existing installation downloads complete MIME without changing message identities or duplicating archives.
+    await pool.query('UPDATE mail_messages SET source_sha256=NULL WHERE mailbox_id=$1 AND id=$2', [`imap:${accountId}`,original.id])
+    await store.sync()
+    archivePage = await store.archives({ query: 'Archived VPN diagnostics', missingOnly: false })
+    assert.equal(archivePage.items.length, 1); assert.equal(archivePage.items[0].id, archivedCopy.id)
+    await recoveryClient.mailboxClose(); await recoveryClient.mailboxDelete('Recovery scratch')
+    mailbox = await store.sync()
+    assert.ok(!mailbox.conversations.some(item => item.id === original.id))
+    archivePage = await store.archives({ query: 'Archived VPN diagnostics', missingOnly: true })
+    assert.equal(archivePage.items.length, 1); assert.ok(archivePage.items[0].missingSince)
+    assert.equal(archivePage.items[0].lastPath, 'Recovery scratch')
+    assert.equal(archivePage.items[0].snapshot.status, 'closed')
+    assert.deepEqual(archivePage.items[0].snapshot.labelIds, ['urgent'])
+    assert.equal(archivePage.items[0].snapshot.assigneeId, supportActor.id)
+    await store.onApplicationShutdown(); store = new MailStore(accountId); await store.init()
+    assert.deepEqual(await store.archiveSource(archivedCopy.id), expectedSource, 'Deleted mail must survive a backend restart')
+    await pool.query('UPDATE mail_archives SET source=$3 WHERE mailbox_id=$1 AND id=$2', [`imap:${accountId}`,archivedCopy.id,Buffer.from('damaged')])
+    await assert.rejects(store.archiveSource(archivedCopy.id), /integrity/)
+    await pool.query('UPDATE mail_archives SET source=$3 WHERE mailbox_id=$1 AND id=$2', [`imap:${accountId}`,archivedCopy.id,expectedSource])
+    const restorations = await Promise.allSettled([store.restoreArchive({ id: archivedCopy.id, folderId: 'inbox' },supportActor),peer.restoreArchive({ id: archivedCopy.id, folderId: 'inbox' },supportActor)])
+    assert.equal(restorations.filter(item => item.status === 'fulfilled').length, 1)
+    assert.equal(restorations.filter(item => item.status === 'rejected').length, 1)
+    mailbox = await store.sync()
+    const restored = mailbox.conversations.find(item => item.id === original.id)
+    assert.equal(restored.status, 'closed'); assert.deepEqual(restored.labelIds, ['urgent']); assert.equal(restored.assigneeId, supportActor.id)
+    assert.equal(restored.projectId, 'inbox'); assert.equal(restored.unread, false)
+    assert.ok(mailbox.conversationStates.find(item => item.id === original.id).revision > archivedCopy.snapshot.revision)
+    const activity = await store.activity([original.id])
+    assert.ok(activity.some(item => item.actor?.id === supportActor.id && item.data.restoredFromArchive === archivedCopy.id && item.data.status === 'sent'))
+    lock = await recoveryClient.getMailboxLock('INBOX')
+    try {
+      const uids = await recoveryClient.search({ header: { 'Message-ID': archiveMessageId } }, { uid: true })
+      assert.equal(uids.length, 1)
+      const recovered = (await recoveryClient.fetchAll(uids,{ source: true,flags: true,internalDate: true },{uid:true}))[0]
+      const { simpleParser } = await import('mailparser'); const parsed = await simpleParser(recovered.source)
+      assert.deepEqual(parsed.attachments[0].content,diagnostic)
+      assert.ok(parsed.html.includes('<strong>Original VPN diagnostics</strong>'))
+      assert.equal(recovered.internalDate.toISOString(),archiveDate.toISOString())
+      assert.ok(recovered.flags.has('\\Seen') && recovered.flags.has('\\Flagged'))
+      await recoveryClient.messageDelete(uids,{uid:true})
+    } finally { lock.release() }
+    await store.sync()
+    // A lost APPEND acknowledgement is durable, and another backend cannot blindly append a second copy.
+    const actualImap = store.imap.bind(store)
+    store.imap = () => { const client = actualImap(); client.append = async () => { throw new Error('Simulated missing APPEND acknowledgement') }; return client }
+    await assert.rejects(store.restoreArchive({ id: archivedCopy.id,folderId:'inbox' },supportActor),/could not be confirmed/)
+    store.imap = actualImap
+    await assert.rejects(peer.restoreArchive({ id: archivedCopy.id,folderId:'inbox' },supportActor),/unconfirmed/)
+    assert.equal((await store.archives({query:'Archived VPN diagnostics',missingOnly:true})).items[0].restoreStatus,'uncertain')
+    assert.deepEqual(await store.archiveSource(archivedCopy.id),expectedSource)
+    await assert.rejects(store.archives({query:'x'.repeat(201),missingOnly:false}),/Invalid/)
+    await assert.rejects(store.archiveSource('../../mail_accounts'),/Invalid/)
+    await assert.rejects(store.archiveSource(randomUUID()),/not found/)
+    // Multiple native copies with identical MIME must keep distinct identities and paginate without omissions.
+    await recoveryClient.mailboxCreate('IT service history')
+    const paginationSource = await nodemailer.createTransport({streamTransport:true,buffer:true}).sendMail({from:'Customer <customer@postfold.test>',to:account.email,subject:'Device enrollment archive',text:'Identical native copies for pagination.',messageId:`<${randomUUID()}@postfold.test>`})
+    for (let index=0;index<51;index++) await recoveryClient.append('IT service history',paginationSource.message,['\\Seen'])
+    mailbox = await store.sync()
+    assert.equal(mailbox.conversations.filter(item=>item.subject==='Device enrollment archive').length,51)
+    const firstPage = await store.archives({query:'Device enrollment archive',missingOnly:false})
+    assert.equal(firstPage.items.length,50); assert.ok(firstPage.nextCursor)
+    const secondPage = await store.archives({query:'Device enrollment archive',missingOnly:false,cursor:firstPage.nextCursor})
+    assert.equal(secondPage.items.length,1); assert.equal(secondPage.nextCursor,null)
+    assert.equal(new Set([...firstPage.items,...secondPage.items].map(item=>item.id)).size,51)
+    // Existing MIME anywhere in IMAP blocks restoring another historical copy of the same source.
+    await assert.rejects(store.restoreArchive({id:firstPage.items[0].id,folderId:'inbox'},supportActor),/already present/)
+    if (process.env.MAIL_TEST_BROWSER === 'true') {
+      const uiSource = await nodemailer.createTransport({streamTransport:true,buffer:true}).sendMail({from:'Customer <customer@postfold.test>',to:account.email,subject:'VPN client diagnostics',text:'The VPN connection drops after sign-in. Attached are the network diagnostics.',html:'<p>The VPN connection drops after sign-in. Attached are the network diagnostics.</p>',messageId:`<${randomUUID()}@postfold.test>`,date:archiveDate,attachments:[{filename:'network-report.bin',content:diagnostic}]})
+      await recoveryClient.append('INBOX',uiSource.message,['\\Seen'],archiveDate)
+      await store.sync()
+      const entry = (await store.archives({query:'VPN client diagnostics',missingOnly:false})).items[0]
+      browserArchiveId = entry.id; browserArchiveSource = await store.archiveSource(entry.id)
+      lock = await recoveryClient.getMailboxLock('INBOX')
+      try { const uids=await recoveryClient.search({header:{'Subject':'VPN client diagnostics'}},{uid:true}); await recoveryClient.messageDelete(uids,{uid:true}) } finally { lock.release() }
+      await store.sync()
+    }
+  } finally { await recoveryClient.logout().catch(() => recoveryClient.close()) }
+  console.info('Complete MIME archive, legacy backfill, external folder deletion, restart, integrity, concurrent restoration, exact attachments/flags/date and uncertainty guards: passed')
+
   app = await createApp(false, '', true)
   await app.listen(0, '127.0.0.1')
   const origin = await app.getUrl()
   assert.equal((await fetch(origin + '/mailbox')).status, 401)
   assert.equal((await fetch(origin + '/mailbox/reply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(reply) })).status, 401)
   assert.equal((await fetch(origin + '/demo/mailbox')).status, 404)
+  assert.equal((await fetch(origin + `/mailbox/archives/${archivedCopy.id}/source`)).status,401)
+  assert.equal((await fetch(origin + '/mailbox/archives/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:archivedCopy.id,folderId:'inbox'})})).status,401)
+  const exported = await fetch(origin + `/mailbox/archives/${archivedCopy.id}/source`,{headers:{Authorization:'Basic '+Buffer.from('operator:test-only-access-password').toString('base64')}})
+  assert.equal(exported.status,200); assert.equal(exported.headers.get('cache-control'),'private, no-store')
+  assert.equal(exported.headers.get('x-content-type-options'),'nosniff'); assert.match(exported.headers.get('content-disposition'),/attachment/)
+  assert.deepEqual(Buffer.from(await exported.arrayBuffer()),expectedSource)
+
   const authorized = await fetch(origin + '/mailbox', { headers: { Authorization: 'Basic ' + Buffer.from('operator:test-only-access-password').toString('base64') } })
   assert.equal(authorized.status, 200)
   assert.equal(authorized.headers.get('cache-control'), 'private, no-store')
@@ -308,6 +425,38 @@ try {
         const stored = await browser('eval', "JSON.parse(localStorage.getItem('postfold:mailbox:support@postfold.test:v1')).drafts")
         assert.ok(!stored.includes('Your laptop enrollment is complete.'))
         console.info('Browser: authenticated SSR, server functions, draft saved before real SMTP send, success cleanup: passed')
+        await browser('click', '.main-nav button:last-child'); await browser('wait', '.settings-tabs')
+        await browser('click', '.settings-tabs button:last-child'); await browser('wait', '.archive-item')
+        await browser('fill', '[aria-label="Search mail archives"]', 'VPN client diagnostics')
+        await browser('wait', '--fn', `document.querySelectorAll('.archive-item').length === 1 && document.querySelector('.archive-item').dataset.archiveId === '${browserArchiveId}'`)
+        await browser('check', '.archive-filter input'); await browser('wait', '--fn', '!document.querySelector(".archive-items").getAttribute("aria-busy").includes("true")')
+        const recoveredPath = join(directory,'recovered-mail.eml')
+        await browser('download', '.archive-item footer button:first-child', recoveredPath)
+        assert.deepEqual(readFileSync(recoveredPath),browserArchiveSource,'Browser .eml download must preserve every MIME byte')
+        for (const [width,height] of [[1440,1040],[390,844],[320,568],[667,375]]) {
+          await browser('set','viewport',String(width),String(height))
+          assert.ok(JSON.parse(await browser('eval','document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight + 1')))
+          await browser('eval','document.querySelector(".archive-restore").scrollIntoView({block:"nearest"})')
+          await browser('click','.archive-restore'); await browser('wait','.archive-dialog:modal')
+          assert.ok(JSON.parse(await browser('eval','(() => {const bounds=document.querySelector(".archive-dialog").getBoundingClientRect();return bounds.left>=0 && bounds.right<=innerWidth && bounds.top>=0 && bounds.bottom<=innerHeight})()')))
+          await browser('press','Escape'); await browser('wait','--fn','!document.querySelector(".archive-dialog")')
+        }
+        await browser('set','viewport','1440','1040')
+        await browser('eval','document.querySelector(".settings-page").scrollTop=0')
+        if (process.env.MAIL_ARCHIVE_SCREENSHOT) await browser('screenshot',process.env.MAIL_ARCHIVE_SCREENSHOT)
+        await browser('eval','document.querySelector(".archive-restore").scrollIntoView({block:"nearest"})')
+        await browser('click','.archive-restore'); await browser('wait','.archive-dialog:modal')
+        await browser('select','.archive-dialog select','inbox')
+        await browser('click','.archive-dialog .primary-button')
+        await browser('wait','--text','Message restored to the IMAP folder. The archive is preserved.')
+        await browser('wait','--fn','!document.querySelector(".archive-dialog")')
+        await browser('uncheck','.archive-filter input')
+        await browser('wait',`[data-archive-id="${browserArchiveId}"]`)
+        await browser('wait','--fn',`document.querySelector('[data-archive-id="${browserArchiveId}"] .archive-restore').disabled`)
+        assert.equal((await store.archives({query:'VPN client diagnostics',missingOnly:false})).items.length,1)
+        assert.equal((await store.archives({query:'VPN client diagnostics',missingOnly:false})).items[0].missingSince,null)
+        console.info('Browser archives: exact MIME download, guarded IMAP restoration, mobile layout and destination dialog: passed')
+
       } finally { await browser('close') }
     }
     console.info('Compiled frontend: anonymous access denied, authenticated real-mail SSR passed')

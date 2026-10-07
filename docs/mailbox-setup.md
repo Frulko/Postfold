@@ -112,17 +112,18 @@ If you keep Caddy's additional `basic_auth` gate, configure the same username an
 
 Open the HTTPS site and sign in at the browser's access prompt. It should display the configured email and **IMAP / SMTP**, with no simulated team presence. Initial synchronization runs in the backend and repeats every 30 seconds, including when no browser is open. **Relever / Refresh** requests a synchronization; the Auto control toggles periodic browser refresh, not the backend polling worker.
 
-Send an IT support request from a test address to the mailbox. Check that it appears, that opening it updates `\\Seen` in a native client, and that a text reply reaches the test address and appears in Sent. Check a project folder and subfolder from both clients. Root project folders use `ID - Project name`; imported ordinary folders keep their names.
+Send an IT support request from a test address to the mailbox. Check that it appears, that opening it updates `\\Seen` in a native client, and that a reply with HTML and an attachment reaches the test address and appears in Sent. Check a project folder and subfolder from both clients. Root project folders use `ID - Project name`; imported ordinary folders keep their names.
 
 ## Current boundaries and recovery
 
 - Synchronization inventories UIDs and flags, then imports up to **200 new message bodies per folder per cycle**, newest first. Older messages arrive over subsequent cycles; change `MAILBOX_SYNC_LIMIT` (1–1000) if needed. MIME messages larger than **16 MiB** are skipped. The cache is retained when synchronization fails. Large mailboxes still require a full UID inventory; incremental MODSEQ synchronization is planned.
-- Bodies render as plain text. Attachments, HTML mail rendering, new-message composition, OAuth and shared drafts/notes are not supported yet. Replies go only to the selected received message's Reply-To/From address; this release has no reply-all or arbitrary recipient editor.
+- Received bodies render as plain text. Replies support sanitized HTML and attachments. Original incoming HTML, attachments and inline assets are preserved in [complete MIME archives](mail-archives.md), with .eml download and IMAP restoration. Incoming attachment browsing, HTML mail rendering, new-message composition, OAuth and shared drafts/notes are not supported yet. Replies go only to the selected received message's Reply-To/From address; this release has no reply-all or arbitrary recipient editor.
 - Read flags and supported moves are applied to IMAP; workflow states, labels, colors and manual ordering stay in PostgreSQL. Filing requires **MOVE and UIDPLUS**. Folder creation, rename and reparenting use IMAP. Live folder deletion is disabled: an empty-folder check cannot prevent another native client adding mail before DELETE. Delete reviewed folders using your native client.
 - IMAP batches are not a transaction across remote folders. A network failure may leave some remote operations applied. Refresh and inspect the resulting state before retrying. Message-ID reconciliation preserves annotations on unambiguous native moves; duplicate/missing Message-IDs and external folder renames can prevent identity preservation.
 - Postfold records a send attempt before handing the message to SMTP. Concurrent sends and repeated request IDs cannot silently send twice. One reply is allowed per received message; select the newest incoming message in a thread. Already synchronized native-client replies are checked before sending, but Postfold cannot lock a native client's SMTP session.
 - `sending` or `uncertain` attempts stay blocked across restarts. There is **no automatic SMTP resend**. Check the provider's logs and Sent folder before any operator intervention; an absent Sent copy alone does not prove the recipient did not receive the message. A recovery UI for these attempts and additional follow-up replies is planned.
-- Back up PostgreSQL (including cached messages and send attempts), protected configuration and encryption keys. Restoring a backup older than an accepted send can lose its reservation: reconcile provider delivery records before reopening sending. Losing the key requires reconfiguring the mail account; the UI cannot recover it.
+- Complete MIME copies and tracking snapshots remain in PostgreSQL after external mail or folder deletion. Existing cached messages receive their full copies over subsequent synchronization cycles. Messages deleted before capture or larger than 16 MiB cannot be recovered; there is no automatic archive purge.
+- Back up PostgreSQL (including complete archives, cached messages and send attempts with their pending/uncertain MIME), protected configuration and encryption keys. Restoring a backup older than an accepted send can lose its reservation: reconcile provider delivery records before reopening sending. Losing the key requires reconfiguring the mail account; the UI cannot recover it.
 
 ## Reproduce the integration checks
 
@@ -132,7 +133,7 @@ With Docker, OpenSSL and the local PostgreSQL demo available:
 pnpm test:mail
 ```
 
-This starts a temporary [GreenMail](https://greenmail-mail-test.github.io/greenmail/) server that does not forward to the Internet, generates a trusted test certificate, and checks encrypted storage, TLS rejection, no plaintext fallback, native folder/read/move behavior, SMTP/Sent, concurrent sends, idempotency and lost SMTP acknowledgements. It cleans up its mailbox database records and container afterward.
+This starts a temporary [GreenMail](https://greenmail-mail-test.github.io/greenmail/) server that does not forward to the Internet, generates a trusted test certificate, and checks encrypted storage, TLS rejection, no plaintext fallback, native folder/read/move behavior, SMTP/Sent, concurrent sends, idempotency, lost SMTP acknowledgements, complete MIME preservation, external folder deletion, restart recovery and guarded restoration with exact attachment bytes. It cleans up its mailbox database records and container afterward.
 
 To also check the compiled frontend, build first:
 

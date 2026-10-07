@@ -21,6 +21,7 @@ A familiar email interface with project folders, conversation tracking and conta
 - Viewport layout with fixed headers and independent panel scrolling.
 - French/English interface, IT support demo, search and automatic refresh.
 - Optional IMAP/SMTP connection, encrypted credentials and duplicate-send protection.
+- [Complete mail archives](docs/mail-archives.md), attachment-preserving downloads and recovery after external deletion.
 - Keycloak SSO with individual sessions and client-role access control.
 - Shared teammate assignment and a conversation activity history with verified SSO authors.
 

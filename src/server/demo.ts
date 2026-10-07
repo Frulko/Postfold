@@ -6,6 +6,7 @@ import { isActivityIds, isConversationUpdate } from '../../shared/conversation-s
 import { getRequestHeader } from '@tanstack/react-start/server'
 import { isReplyRequest } from '../../shared/mail-account'
 import { authMode } from '../../shared/auth'
+import { isArchiveId, isArchiveSearch, isArchiveRestore, type MailArchivePage } from '../../shared/mail-archive'
 
 function apiPath(path: string) {
   return `${process.env.API_ORIGIN ?? 'http://127.0.0.1:4000'}${process.env.MAILBOX_MODE === 'imap' ? '/mailbox' : '/demo'}${path}`
@@ -97,4 +98,34 @@ export const saveAuthoring = createServerFn({ method: 'POST' }).validator((input
     const response = await fetch(`${process.env.API_ORIGIN ?? 'http://127.0.0.1:4000'}/authoring`, { method: 'PUT', headers: apiHeaders(), body: JSON.stringify(data), signal: AbortSignal.timeout(15_000) })
     if (response.ok) return { ok: true, settings: await response.json() }
     return { ok: false, error: (await response.json()).message ?? 'Settings could not be saved.' }
+  })
+
+export const getMailArchives = createServerFn({ method: 'POST' })
+  .validator((input: unknown) => { if (!isArchiveSearch(input)) throw new Error('Invalid archive search.'); return input })
+  .handler(async ({ data }): Promise<MailArchivePage> => {
+    if (process.env.MAILBOX_MODE !== 'imap') return { items: [], nextCursor: null, stats: { messages: 0, bytes: 0, missing: 0, cachedWithoutSource: 0 } }
+    const response = await fetch(apiPath('/archives/search'), { method: 'POST', headers: apiHeaders(), body: JSON.stringify(data), signal: AbortSignal.timeout(15_000) })
+    if (!response.ok) throw new Error('Mail archives unavailable.')
+    return response.json()
+  })
+
+export const downloadMailArchive = createServerFn({ method: 'POST' })
+  .validator((input: unknown) => { if (!isArchiveId(input)) throw new Error('Invalid archive ID.'); return input })
+  .handler(async ({ data }): Promise<{ content: string }> => {
+    if (process.env.MAILBOX_MODE !== 'imap') throw new Error('No mailbox connected.')
+    const response = await fetch(apiPath(`/archives/${data}/source`), { headers: apiHeaders(), signal: AbortSignal.timeout(30_000) })
+    if (!response.ok) throw new Error('Archived message could not be downloaded.')
+    return { content: Buffer.from(await response.arrayBuffer()).toString('base64') }
+  })
+
+export const restoreMailArchive = createServerFn({ method: 'POST' })
+  .validator((input: unknown) => { if (!isArchiveRestore(input)) throw new Error('Invalid archive restoration.'); return input })
+  .handler(async ({ data }): Promise<{ ok: boolean; id?: string; synchronized?: boolean; error?: string }> => {
+    if (process.env.MAILBOX_MODE !== 'imap') return { ok: false, error: 'No mailbox connected.' }
+    try {
+      const response = await fetch(apiPath('/archives/restore'), { method: 'POST', headers: apiHeaders(), body: JSON.stringify(data), signal: AbortSignal.timeout(120_000) })
+      if (response.ok) return { ok: true, ...await response.json() }
+      if ([400,404,409,503].includes(response.status)) return { ok: false, error: (await response.json()).message }
+    } catch { /* Never automatically retry an IMAP APPEND after a timeout. */ }
+    return { ok: false, error: 'Restoration could not be confirmed. The archive is safe; inspect IMAP before retrying.' }
   })

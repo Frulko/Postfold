@@ -1,5 +1,5 @@
 import 'reflect-metadata'
-import { Body, Controller, Get, HttpCode, Inject, Module, Optional, Patch, Put, Post, Req, Res, UseGuards, UnauthorizedException, ForbiddenException, type CanActivate, type ExecutionContext } from '@nestjs/common'
+import { Body, Controller, Get, HttpCode, Inject, Module, Optional, Param, Patch, Put, Post, Req, Res, UseGuards, UnauthorizedException, ForbiddenException, type CanActivate, type ExecutionContext } from '@nestjs/common'
 import type { NestExpressApplication } from '@nestjs/platform-express'
 import { NestFactory } from '@nestjs/core'
 import { demoMailbox, demoMembers } from './demo-mailbox.js'
@@ -112,6 +112,15 @@ class MailboxController {
   @Patch('conversations/state') conversations(@Body() input: unknown, @Req() request: AuthRequest) { return this.mailbox.updateConversations(input, request.viewer) }
   @Post('conversations/activity') @HttpCode(200) activity(@Body() ids: unknown) { return this.mailbox.activity(ids) }
   @Post('reply') reply(@Body() input: unknown, @Req() request: AuthRequest) { return this.mailbox.reply(input, request.viewer) }
+  @Post('archives/search') @HttpCode(200) archives(@Body() input: unknown) { return this.mailbox.archives(input) }
+  @Get('archives/:id/source') async archiveSource(@Param('id') id: string, @Res() response: { setHeader(name: string, value: string): void; send(value: Buffer): void }) {
+    const source = await this.mailbox.archiveSource(id)
+    response.setHeader('Content-Type', 'application/octet-stream')
+    response.setHeader('Content-Disposition', `attachment; filename="postfold-${id}.eml"`)
+    response.setHeader('X-Content-Type-Options', 'nosniff')
+    response.send(source)
+  }
+  @Post('archives/restore') restore(@Body() input: unknown, @Req() request: AuthRequest) { return this.mailbox.restoreArchive(input, request.viewer) }
 }
 
 export async function createApp(demoMode = false, mailboxId = 'support-demo', liveMode = false) {

@@ -4,7 +4,7 @@
 
 Postfold brings project folders, conversation tracking and contact context into a familiar email interface. It is built with TanStack Start, React, a separate NestJS API and PostgreSQL, with optional native IMAP/SMTP connectivity.
 
-**Status: early development, with an optional live IMAP/SMTP mode.** The default demo has fictional messages/contacts, disabled sending and no authentication. [Configure a real mailbox](mailbox-setup.md) to enable encrypted credentials, authenticated access, IMAP synchronization and SMTP text replies. Switch between French and English using the header selector. The locale is stored in the URL (`?lang=fr` or `?lang=en`) and applies during server rendering. Messages, custom folder names and labels are never translated. The fictional requests cover VPN access, MFA reset, onboarding and backup recovery.
+**Status: early development, with an optional live IMAP/SMTP mode.** The default demo has fictional messages/contacts, disabled sending and no authentication. [Configure a real mailbox](mailbox-setup.md) to enable encrypted credentials, authenticated access, IMAP synchronization and SMTP rich-text replies. Switch between French and English using the header selector. The locale is stored in the URL (`?lang=fr` or `?lang=en`) and applies during server rendering. Messages, custom folder names and labels are never translated. The fictional requests cover VPN access, MFA reset, onboarding and backup recovery.
 
 ![Postfold inbox with project folders, conversation filters, message reader and contact context](screenshots/inbox-overview.png)
 
@@ -99,6 +99,12 @@ Open **Settings** for personal and shared template CRUD, an HTML signature edito
 ![Editable HTML signature with email-compatible table preview](screenshots/signature-editor.png)
 
 ![Team dashboard with access controls, roles and assigned signatures](screenshots/team-dashboard.png)
+
+### Complete mail archives
+
+Open **Settings → Archives** to search preserved messages, filter copies absent from IMAP, download their original .eml or restore them to an existing folder. Complete MIME includes HTML and attachments; copies remain after deletion from another client. Read [archive limits and recovery](mail-archives.md) before relying on it. This capture uses real IMAP with fictional IT diagnostics.
+
+![Mail archive with preserved MIME size, external-deletion status, .eml download and IMAP restoration](screenshots/mail-archives.png)
 
 ### Connected mailbox
 
@@ -202,7 +208,7 @@ Changing the search, conversation filter or project clears selection. A failed l
 | Message/thread display mode | Browser localStorage | Personal preference. |
 | Presence avatars and activity labels | UI fixtures | Simulated. |
 
-Local persistence is not an offline PWA. In live mode, IMAP is authoritative for folders, native moves and the `\Seen` flag; PostgreSQL caches messages and stores collaborative metadata, encrypted accounts and durable send attempts. Browser storage is scoped by mailbox email and, with Keycloak enabled, user ID. Existing demo localStorage keys and database/volume names are retained across the project rename. Old browser-local `placements` entries are ignored: the API provides filing state. Existing demo databases keep their settings; new demo databases receive the IT support fixtures. See [live-mode boundaries](mailbox-setup.md#current-boundaries-and-recovery) for protocol and recovery limits.
+Local persistence is not an offline PWA. In live mode, IMAP is authoritative for folders, native moves and the `\Seen` flag; PostgreSQL caches active messages and stores complete MIME archives, collaborative metadata, encrypted accounts and durable send attempts. Archives survive native deletion; an off-server database backup is still needed to recover from database or host loss. Browser storage is scoped by mailbox email and, with Keycloak enabled, user ID. Existing demo localStorage keys and database/volume names are retained across the project rename. Old browser-local `placements` entries are ignored: the API provides filing state. Existing demo databases keep their settings; new demo databases receive the IT support fixtures. See [live-mode boundaries](mailbox-setup.md#current-boundaries-and-recovery) for protocol and recovery limits.
 
 ## Architecture
 
@@ -211,7 +217,7 @@ Local persistence is not an offline PWA. In live mode, IMAP is authoritative for
 | `src/` — TanStack Start + React | Interface, SSR, local interactions and server-side HTTP adapters to NestJS. |
 | `api/` — NestJS | Mail endpoints, input validation, PostgreSQL writes, concurrency rules and Keycloak sessions/guards. |
 | `shared/` | Shared contracts, validators, folder ordering and revision-aware state merging. |
-| PostgreSQL | Authoritative shared folder settings and conversation tracking states. |
+| PostgreSQL | Shared settings, tracking, authoring, sessions, encrypted accounts, send reservations and complete MIME archives. |
 | `api/mail-store.ts` | IMAP polling, UID/UIDVALIDITY reconciliation, native folder/read/move operations, SMTP replies and durable send reservations. |
 
 The intended boundary keeps messages and project folders in IMAP, with collaborative metadata stored separately. Native mail clients should remain usable. Application send reservations cannot prevent someone sending directly from a native client; reconciliation must account for that.

@@ -523,8 +523,8 @@ textarea { width: 100%; border: 1px solid var(--line); border-radius: 7px; paddi
 .settings-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:24px; }
 .settings-heading h1 { margin:8px 0; font-size:28px; letter-spacing:-.7px; }
 .settings-heading p { margin:0; color:var(--muted); font-size:14px; }
-.settings-tabs { display:flex; gap:24px; border-bottom:1px solid var(--line); margin-bottom:24px; }
-.settings-tabs button { padding:12px 0; border:0; border-bottom:2px solid transparent; background:none; font:inherit; font-size:14px; color:var(--muted); cursor:pointer; }
+.settings-tabs { display:flex; overflow-x:auto; scrollbar-width:thin; gap:24px; border-bottom:1px solid var(--line); margin-bottom:24px; }
+.settings-tabs button { flex-shrink:0; min-height:44px; white-space:nowrap; padding:12px 0; border:0; border-bottom:2px solid transparent; background:none; font:inherit; font-size:14px; color:var(--muted); cursor:pointer; }
 .settings-tabs button.active { border-bottom-color:var(--accent); color:var(--accent); font-weight:600; }
 .settings-tools { display:flex; gap:12px; align-items:center; justify-content:space-between; margin-bottom:20px; }
 .settings-search { display:flex; align-items:center; gap:8px; padding:9px 12px; background:white; border:1px solid var(--line); border-radius:var(--radius); width:min(320px,100%); }
@@ -639,3 +639,36 @@ textarea { width: 100%; border: 1px solid var(--line); border-radius: 7px; paddi
 @media(min-width:1500px) { .content-grid[data-contact-collapsed=true] { grid-template-columns: 344px minmax(420px, 1fr); } }
 @media(max-width:1150px) { .content-grid[data-contact-collapsed=true] { grid-template-columns: minmax(220px, .85fr) minmax(0, 1fr); } }
 @media(max-width:400px) { .reading-context .status { display:none; } }
+
+.archive-stats strong { font-variant-numeric: tabular-nums; }
+.archive-tools { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:20px 0; }
+.archive-tools .settings-search { flex:1; min-width:min(240px,100%); }
+.archive-filter { display:flex; align-items:center; gap:8px; min-height:40px; font-size:12px; cursor:pointer; }
+.archive-filter input { accent-color:var(--accent); }
+.archive-items { display:grid; gap:12px; }
+.archive-item { min-width:0; padding:18px; border:1px solid var(--line); border-radius:10px; background:#fff; }
+.archive-item header { display:flex; justify-content:space-between; gap:12px; font-size:12px; }
+.archive-item header div { min-width:0; }
+.archive-item header small { display:block; margin-top:4px; color:var(--muted); overflow-wrap:anywhere; }
+.archive-item time { flex-shrink:0; font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums; }
+.archive-item h2 { margin:14px 0 8px; font-size:14px; font-weight:600; overflow-wrap:anywhere; }
+.archive-item > p { margin:8px 0; font-size:12px; line-height:1.6; color:var(--muted); overflow-wrap:anywhere; }
+.archive-meta { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; margin-top:14px; font-size:11px; color:var(--muted); }
+.archive-meta > span:first-child { min-width:0; overflow-wrap:anywhere; }
+.archive-missing { background:#fff7ed; color:#9a3412; }
+.archive-item footer { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; margin-top:16px; padding-top:14px; border-top:1px solid var(--line); }
+.archive-item footer small { font-size:10px; color:var(--muted); }
+.archive-item footer > div { display:flex; flex-wrap:wrap; gap:8px; }
+.archive-more { margin-top:20px; }
+.archive-dialog { max-width:560px; }
+.archive-dialog form { display:grid; gap:18px; padding:24px; }
+.archive-dialog header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.archive-dialog header h2 { font-size:18px; font-weight:600; }
+.archive-dialog header .icon-button { width:40px; height:40px; }
+.archive-dialog form > p { font-size:13px; line-height:1.6; overflow-wrap:anywhere; }
+.archive-dialog label { display:grid; gap:8px; font-size:12px; }
+.archive-dialog select { width:100%; min-height:40px; border:1px solid var(--line); border-radius:6px; padding:8px; background:#fff; }
+.archive-dialog footer { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; }
+@media(max-width:620px) { .archive-tools .settings-search { flex-basis:100%; }.archive-item header { flex-wrap:wrap; }.archive-item footer > div { width:100%; }.archive-item footer button { flex:1; }.archive-dialog form { padding:18px; } }
+
+@media(max-width:620px) { .settings-tabs { gap:12px; }.settings-tabs button { font-size:13px; } }

@@ -1,4 +1,6 @@
 const paths = {
+  archive: 'M3 3h18v5H3V3Zm2 5v13h14V8M10 12h4',
+  download: 'M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5',
   maximize: 'M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5',
   minimize: 'M3 8h5V3M21 8h-5V3M16 21v-5h5M8 21v-5H3',
   bold: 'M6 4h7a4 4 0 0 1 0 8H6V4Zm0 8h8a4 4 0 0 1 0 8H6v-8Z',

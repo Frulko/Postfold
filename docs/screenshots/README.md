@@ -1,6 +1,6 @@
 # Feature screenshots
 
-These PNGs are captured from the running Postfold application, not generated mockups. All messages and contacts are fictional. Captures use the English interface and IT support requests (VPN, MFA, onboarding and backups). `live-mailbox.png` uses real TLS-enabled IMAP/SMTP against an isolated GreenMail test server. `keycloak-session.png` and `assignment-and-activity.png` use a real isolated Keycloak realm and individually authenticated demo users, with simulated presence hidden. Other captures show demo mode with simulated presence.
+These PNGs are captured from the running Postfold application, not generated mockups. All messages and contacts are fictional. Captures use the English interface and IT support requests (VPN, MFA, onboarding and backups). `live-mailbox.png` and `mail-archives.png` use real TLS-enabled IMAP/SMTP against an isolated GreenMail test server. `keycloak-session.png` and `assignment-and-activity.png` use a real isolated Keycloak realm and individually authenticated demo users, with simulated presence hidden. Other captures show demo mode with simulated presence.
 
 | File | Highlight | Capture size |
 | --- | --- | --- |
@@ -19,6 +19,7 @@ These PNGs are captured from the running Postfold application, not generated moc
 | `signature-editor.png` | Editable table-based HTML signature and sandboxed preview | 1440 × 1040 |
 | `team-dashboard.png` | Known members, application roles, signature assignment and access controls | 1440 × 1040 |
 | `mobile-composer.png` | Rich writing controls and attachments inside the fixed mobile viewport | 390 × 844 |
+| `mail-archives.png` | Preserved complete MIME, external-deletion filter, .eml download and IMAP restoration | 1440 × 1040 |
 | `live-mailbox.png` | Authenticated IMAP inbox, native folders and enabled SMTP reply | 1440 × 1040 |
 | `keycloak-session.png` | Individual Keycloak identity, shared demo inbox and Sign out | 1440 × 1040 |
 | `assignment-and-activity.png` | Shared assignment, teammate initials and recorded actions by authenticated Keycloak users | 1440 × 1200 |
@@ -29,7 +30,7 @@ These PNGs are captured from the running Postfold application, not generated moc
 
 For the authoring captures, run `AUTHORING_SCREENSHOTS="$PWD/docs/screenshots" pnpm test:authoring`. The check creates its own mailbox, templates, signature, browser and fictional file; it removes them when finished.
 
-For the connected mailbox, run `pnpm build`, then `MAIL_TEST_WEB=true MAIL_TEST_BROWSER=true MAIL_TEST_SCREENSHOT="$PWD/docs/screenshots/live-mailbox.png" pnpm test:mail`. The integration check creates and removes its own mail server and test data and sends only to fictional local recipients.
+For the connected mailbox, run `pnpm build`, then `MAIL_TEST_WEB=true MAIL_TEST_BROWSER=true MAIL_TEST_SCREENSHOT="$PWD/docs/screenshots/live-mailbox.png" MAIL_ARCHIVE_SCREENSHOT="$PWD/docs/screenshots/mail-archives.png" pnpm test:mail`. The integration check creates and removes its own mail server and test data and sends only to fictional local recipients.
 
 For SSO, run `KEYCLOAK_TEST_SCREENSHOT="$PWD/docs/screenshots/keycloak-session.png" pnpm test:sso`. The check logs in a fictional support user and removes its isolated realm, sessions and test mailbox afterward.
 

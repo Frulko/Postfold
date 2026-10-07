@@ -92,7 +92,7 @@ docker compose exec -T db pg_dump -U postfold -d postfold --format=custom \
   > "backups/postfold-$(date +%Y%m%d-%H%M%S).dump"
 ```
 
-Check that `pg_dump` succeeded and the backup is nonempty before continuing. Keep the matching encryption key and configuration in the protected backup; a database dump alone cannot recover encrypted credentials or sessions. Store backups away from this host and test restoration.
+Check that `pg_dump` succeeded and the backup is nonempty before continuing. The dump includes [complete MIME archives](mail-archives.md), attachments and pending/uncertain send sources; allow for their storage growth. Keep the matching encryption key and configuration in the protected backup; a database dump alone cannot recover encrypted credentials or sessions. Store backups away from this host and test restoration.
 
 4. Edit `POSTFOLD_IMAGE` in `.env` to the new exact version/digest (or `postfold:NEW_VERSION` for an imported archive), then:
 

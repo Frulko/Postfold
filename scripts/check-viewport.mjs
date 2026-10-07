@@ -112,6 +112,8 @@ try {
   assert.equal(evaluate('document.querySelector("#contact-note").value'), 'Mobile contact draft')
   browser('click', '.contact-panel-heading button')
   browser('wait', '--fn', 'document.querySelector(".contact-panel").hidden')
+  // Hiding commits before the next-frame scroll/focus restoration; wait for both.
+  browser('wait', '--fn', 'document.activeElement?.matches(".contact-toggle")')
   assert.equal(evaluate('document.querySelector(".content-grid").scrollTop'), mobileReadingPosition)
   click('.main-nav button:first-child')
   click('.thread-row:first-child input')
