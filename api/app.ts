@@ -1,5 +1,6 @@
 import 'reflect-metadata'
 import { Body, Controller, Get, HttpCode, Inject, Module, Optional, Patch, Put, Post, Req, Res, UseGuards, UnauthorizedException, ForbiddenException, type CanActivate, type ExecutionContext } from '@nestjs/common'
+import type { NestExpressApplication } from '@nestjs/platform-express'
 import { NestFactory } from '@nestjs/core'
 import { demoMailbox, demoMembers } from './demo-mailbox.js'
 import { ProjectStore } from './project-store.js'
@@ -13,7 +14,7 @@ type AuthRequest = { headers: { authorization?: string; cookie?: string; origin?
 type AuthResponse = { setHeader(name: string, value: string | string[]): void; redirect(status: number, url: string): void }
 
 class MailboxGuard implements CanActivate {
-  constructor(@Inject('AUTH_REQUIRED') private readonly required: boolean, @Optional() @Inject(KeycloakSessions) private readonly sessions?: KeycloakSessions) {}
+  constructor(@Inject('AUTH_REQUIRED') private readonly required: boolean, @Optional() @Inject(KeycloakSessions) private readonly sessions?: KeycloakSessions, @Optional() @Inject(ProjectStore) private readonly store?: ProjectStore) {}
   async canActivate(context: ExecutionContext) {
     if (!this.required) return true
     const request = context.switchToHttp().getRequest<AuthRequest>()
@@ -22,6 +23,7 @@ class MailboxGuard implements CanActivate {
       if (!['GET', 'HEAD'].includes(request.method) && request.headers.origin !== this.sessions.origin) throw new ForbiddenException('Mailbox changes require a same-origin request.')
       const viewer = await this.sessions.viewer(request.headers.cookie)
       if (!viewer) throw new UnauthorizedException('Sign in with Keycloak.')
+      await this.store?.checkMemberAccess(viewer)
       request.viewer = viewer
     } else if (!checkAccess(request.headers.authorization)) throw new UnauthorizedException('Authentication required')
     return true
@@ -52,6 +54,15 @@ class DemoController {
   @Post('conversations/activity')
   @HttpCode(200)
   activity(@Body() ids: unknown) { return this.projects.activity(ids) }
+}
+
+@Controller('authoring')
+@UseGuards(MailboxGuard)
+class AuthoringController {
+  constructor(@Inject(ProjectStore) private readonly store: ProjectStore) {}
+  private actor(request: AuthRequest) { return request.viewer ?? (this.store instanceof MailStore ? { id: 'shared-operator', name: 'Shared operator', email: '' } : demoMembers[0]) }
+  @Get() read(@Req() request: AuthRequest) { return this.store.authoring(this.actor(request)) }
+  @Put() update(@Body() input: unknown, @Req() request: AuthRequest) { return this.store.updateAuthoring(input, this.actor(request)) }
 }
 
 @Module({})
@@ -110,12 +121,13 @@ export async function createApp(demoMode = false, mailboxId = 'support-demo', li
   const store = liveMode ? new MailStore() : demoMode ? new ProjectStore(mailboxId) : undefined
   try { await sessions?.init(); await store?.init() }
   catch (error) { await sessions?.onApplicationShutdown(); await store?.onApplicationShutdown(); throw error }
-  const app = await NestFactory.create({
+  const app = await NestFactory.create<NestExpressApplication>({
     module: AppModule,
-    controllers: [HealthController, ...(liveMode ? [MailboxController] : demoMode ? [DemoController] : []), ...(sessions ? [AuthController] : [])],
+    controllers: [HealthController, ...(store ? [AuthoringController] : []), ...(liveMode ? [MailboxController] : demoMode ? [DemoController] : []), ...(sessions ? [AuthController] : [])],
     providers: [{ provide: 'AUTH_REQUIRED', useValue: liveMode || !!sessions }, MailboxGuard,
-      ...(store ? [{ provide: liveMode ? MailStore : ProjectStore, useValue: store }] : []), ...(sessions ? [{ provide: KeycloakSessions, useValue: sessions }] : [])],
+      ...(store ? [{ provide: ProjectStore, useValue: store }, ...(liveMode ? [{ provide: MailStore, useValue: store }] : [])] : []), ...(sessions ? [{ provide: KeycloakSessions, useValue: sessions }] : [])],
   }, { logger: false, abortOnError: false })
+  app.useBodyParser('json', { limit: '16mb' })
   app.enableShutdownHooks()
   if (store instanceof MailStore) store.startPolling()
   return app

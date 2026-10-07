@@ -43,6 +43,8 @@ jobs:
           MAIL_TEST_BROWSER: 'true'
       - name: Keycloak SSO and shared assignment integration
         run: node scripts/check-keycloak.mjs
+      - name: Rich authoring and team management integration
+        run: node scripts/check-authoring.mjs
       - name: Responsive viewport and multi-contact conversation integration
         env:
           DEMO_MODE: 'true'

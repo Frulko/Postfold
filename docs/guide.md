@@ -76,9 +76,19 @@ Keep contact details, related projects and conversation history together. Multi-
 
 ### Draft composer
 
-Save a draft while keeping the Send control visible. The disabled Send button and confirmation make the current demo boundary explicit.
+Write rich replies with formatting, lists, links, tables, template insertion and an assigned signature. Preview the HTML before sending. Attach files by selection, drag-and-drop or clipboard paste; attachments survive reloads in IndexedDB. Text and formatting are autosaved locally, with Save draft and Send available together. Send remains disabled in the fictional demo. [Writing and team management](authoring.md) covers permissions and limits.
 
 ![Draft composer with Save draft and disabled Send buttons beside contact notes](screenshots/draft-composer.png)
+
+### Templates, signatures and team management
+
+Open **Settings** for personal and shared template CRUD, an HTML signature editor with sandboxed previews, and member access/role/signature management. Shared settings persist in PostgreSQL with revision checks; a conflict preserves the editor content.
+
+![Personal and team email templates](screenshots/email-templates.png)
+
+![Editable HTML signature with email-compatible table preview](screenshots/signature-editor.png)
+
+![Team dashboard with access controls, roles and assigned signatures](screenshots/team-dashboard.png)
 
 ### Connected mailbox
 
@@ -175,7 +185,9 @@ Changing the search, conversation filter or project clears selection. A failed l
 | Messages and contacts | Demo fixtures, or IMAP/cache in live mode | Shared mailbox data; demo data is fictional. |
 | Teammate directory, assignments and recorded activity | PostgreSQL | Yes, on refresh. Demo identities are fictional. |
 | Conversation filing and label assignments | PostgreSQL | Yes, on refresh. |
-| Notes and drafts | Browser localStorage | No. |
+| Personal/team templates, signatures and member access/roles | PostgreSQL | Yes. Personal templates are visible only to their owner. |
+| Notes and rich draft text | Browser localStorage | No. |
+| Draft attachments | Browser IndexedDB | No. |
 | Interface language | URL search parameter | Per user; does not change shared names. |
 | Message/thread display mode | Browser localStorage | Personal preference. |
 | Presence avatars and activity labels | UI fixtures | Simulated. |
@@ -215,7 +227,7 @@ pnpm test
 pnpm build
 ```
 
-`pnpm test` starts the demo database, compiles the API and runs Node's built-in tests. Checks cover search, selection, filing, folder hierarchy and ordering, labels and deletion cleanup, locale validation/interpolation, persistence, stale revisions and all-or-nothing batch conflicts.
+`pnpm test` starts the demo database, compiles the API and runs Node's built-in tests. Checks cover search, selection, filing, hierarchy, labels, locales, persistence, stale revisions, batch conflicts, personal template ownership, safe HTML signatures, member access and attachment validation. `pnpm test:authoring` builds and starts an isolated production demo to exercise the writing/settings UI, attachment persistence and responsive dialogs; it requires `agent-browser`.
 
 With `pnpm dev` running and the `agent-browser` CLI installed:
 

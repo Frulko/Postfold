@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { ImapFlow, type FetchMessageObject } from 'imapflow'
 import nodemailer from 'nodemailer'
 import { simpleParser } from 'mailparser'
+import { cleanEmailHtml } from './email-html.js'
 import { ProjectStore } from './project-store.js'
 import { loadAccount } from './mail-secrets.js'
 import { isMailAddress, isReplyRequest, type MailAccount } from '../shared/mail-account.js'
@@ -13,6 +14,7 @@ import type { Conversation, ConversationUpdate, DemoMailbox, Member, Project } f
 
 type CachedMessage = { id: string; path: string; validity: string; uid: number; raw_id: string | null; data: Conversation & { replyTo?: string; references?: string[]; receivedAt?: string } }
 type Folder = { id: string; path: string }
+const MAX_MIME_BYTES = 16 * 1024 * 1024 // Includes base64 MIME overhead for a 10 MiB attachment.
 const hash = (value: string) => createHash('sha256').update(value).digest('hex').slice(0, 24)
 const emptyMailbox = { projects: [{ id: 'inbox', name: 'INBOX', color: 'blue', code: null }], contacts: [], conversations: [] }
 const slot = (path: string, validity: string, uid: number) => JSON.stringify([path, validity, uid])
@@ -183,14 +185,14 @@ export class MailStore extends ProjectStore {
     let importPending = false
     for (const { folder, id } of folders) {
       const items = inventory.filter((item) => item.path === folder.path)
-      const uncached = items.filter((item) => !bySlot.has(slot(item.path, item.validity, item.message.uid)) && (item.message.size ?? 0) <= 10 * 1024 * 1024)
+      const uncached = items.filter((item) => !bySlot.has(slot(item.path, item.validity, item.message.uid)) && (item.message.size ?? 0) <= MAX_MIME_BYTES)
       const missing = uncached.slice(-this.limit)
       importPending ||= uncached.length > missing.length
       const raw = new Map<number, Buffer>()
       if (missing.length) {
         const lock = await client.getMailboxLock(folder.path)
         try {
-          const small = missing.filter((item) => (item.message.size ?? 0) <= 10 * 1024 * 1024)
+          const small = missing.filter((item) => (item.message.size ?? 0) <= MAX_MIME_BYTES)
           if (small.length) for await (const message of client.fetch(small.map((item) => item.message.uid).join(','), { uid: true, source: true }, { uid: true })) {
             if (message.source) raw.set(message.uid, message.source)
           }
@@ -368,7 +370,8 @@ export class MailStore extends ProjectStore {
   async reply(input: unknown, actor?: Member) {
     if (!isReplyRequest(input)) throw new BadRequestException('Invalid reply.')
     return this.exclusive(async () => {
-      const digest = hash(JSON.stringify([input.id, input.text]))
+      const digest = hash(JSON.stringify(input.html === undefined && !input.attachments?.length ? [input.id, input.text] : [input.id, input.text, input.html ?? '', input.attachments ?? []]))
+      const html = input.html === undefined ? undefined : cleanEmailHtml(input.html)
       const { rows: attempts } = await this.pool.query('SELECT status, body_hash, sent_copy FROM mail_sends WHERE mailbox_id=$1 AND request_id=$2', [this.mailboxId, input.requestId])
       if (attempts.length) {
         if (attempts[0].body_hash !== digest) throw new ConflictException('Request ID already used for a different reply.')
@@ -401,7 +404,7 @@ export class MailStore extends ProjectStore {
         participants: [{ name: message.participants?.find(person => person.email.toLowerCase() === message.replyTo!.toLowerCase())?.name ?? message.replyTo, email: message.replyTo }],
         sender: { name: this.account.name || this.account.email, email: this.account.email }, preview: input.text.replace(/\s+/g, ' ').slice(0, 200), body: input.text, unread: false }
       const generated = await nodemailer.createTransport({ streamTransport: true, buffer: true }).sendMail({
-        from: { name: this.account.name, address: this.account.email }, to: message.replyTo, subject: outgoing.subject, text: input.text, date, messageId,
+        from: { name: this.account.name, address: this.account.email }, to: message.replyTo, subject: outgoing.subject, text: input.text, html, attachments: input.attachments?.map(a => ({ filename: a.filename, contentType: a.contentType, content: Buffer.from(a.content, 'base64') })), date, messageId,
         inReplyTo: message.messageId, references: [...(message.references ?? []), ...(message.messageId ? [message.messageId] : [])],
         disableFileAccess: true, disableUrlAccess: true,
       })

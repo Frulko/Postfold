@@ -13,7 +13,11 @@ These PNGs are captured from the running Postfold application, not generated moc
 | `manual-folder-order.png` | Compact folder tree, children, colors and manual drag handles | 1440 × 1040 |
 | `labels.png` | Shared label picker and batch assignment | 1440 × 1040 |
 | `contacts-and-notes.png` | Contact history, project links and a local note | 1440 × 1040 |
-| `draft-composer.png` | Saved local draft and disabled Send control | 1440 × 1040 |
+| `draft-composer.png` | Rich response, template insertion, assigned HTML signature and saved attachment | 1440 × 1040 |
+| `email-templates.png` | Personal and team email templates with management controls | 1440 × 1040 |
+| `signature-editor.png` | Editable table-based HTML signature and sandboxed preview | 1440 × 1040 |
+| `team-dashboard.png` | Known members, application roles, signature assignment and access controls | 1440 × 1040 |
+| `mobile-composer.png` | Rich writing controls and attachments inside the fixed mobile viewport | 390 × 844 |
 | `live-mailbox.png` | Authenticated IMAP inbox, native folders and enabled SMTP reply | 1440 × 1040 |
 | `keycloak-session.png` | Individual Keycloak identity, shared demo inbox and Sign out | 1440 × 1040 |
 | `assignment-and-activity.png` | Shared assignment, teammate initials and recorded actions by authenticated Keycloak users | 1440 × 1200 |
@@ -21,6 +25,8 @@ These PNGs are captured from the running Postfold application, not generated moc
 | `mobile-thread.png` | Long thread below the fixed mobile header, message order and individual senders | 390 × 900 |
 
 ## Refreshing captures
+
+For the authoring captures, run `AUTHORING_SCREENSHOTS="$PWD/docs/screenshots" pnpm test:authoring`. The check creates its own mailbox, templates, signature, browser and fictional file; it removes them when finished.
 
 For the connected mailbox, run `pnpm build`, then `MAIL_TEST_WEB=true MAIL_TEST_BROWSER=true MAIL_TEST_SCREENSHOT="$PWD/docs/screenshots/live-mailbox.png" pnpm test:mail`. The integration check creates and removes its own mail server and test data and sends only to fictional local recipients.
 

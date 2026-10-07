@@ -64,6 +64,7 @@ KEYCLOAK_ISSUER=https://sso.example.com/realms/company
 KEYCLOAK_CLIENT_ID=postfold
 KEYCLOAK_CLIENT_SECRET_FILE=/etc/postfold/secrets/keycloak-client.secret
 KEYCLOAK_REQUIRED_ROLE=support
+KEYCLOAK_ADMIN_ROLE=support-admin
 MAILBOX_KEY_FILE=/etc/postfold/secrets/mailbox.key
 MAILBOX_KEY_ID=v1
 ```
@@ -120,3 +121,11 @@ pnpm test:sso
 ```
 
 The check builds Postfold, starts an isolated Keycloak 26.5.2 realm with fictional users and drives the compiled frontend in Chromium. It verifies login, PKCE/state protection, role denial, encrypted sessions, cookies, frontend/server-function access, concurrent token refresh across two API instances, origin rejection, competing assignments, trusted audit authors, the assignment/activity UI and logout. Its containers, temporary secrets and test mailbox/session records are removed afterward.
+
+## Mailbox administrators
+
+Create a second **client role**, `support-admin`, and grant it together with `support` to at least one mailbox administrator. Set `KEYCLOAK_ADMIN_ROLE` if your role has another name. The API reads this role from the verified access token; roles submitted by the browser are never trusted. Existing sessions receive changed Keycloak roles when their tokens are refreshed; sign out and back in to apply a new role immediately.
+
+In Postfold, open **Settings → Team** to assign HTML signatures, grant/revoke an application administrator role or disable mailbox access. An application role is stored in PostgreSQL and does not modify Keycloak. Disabling a member blocks their next guarded Postfold API request, including existing sessions. Keycloak still owns account creation, identity details, passwords and MFA. Create/invite users there; authorized users appear in Postfold after their first visit. Administrators cannot revoke their own access through this dashboard.
+
+See [writing and team management](authoring.md) for personal/shared template permissions and the shared Basic identity boundary.

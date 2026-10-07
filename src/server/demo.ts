@@ -1,3 +1,4 @@
+import { isAuthoringChange } from '../../shared/authoring'
 import { createServerFn } from '@tanstack/react-start'
 import type { Activity, ConversationState, DemoMailbox, ProjectSettings } from '../../shared/mailbox'
 import { isProjectSettings } from '../../shared/projects'
@@ -83,4 +84,17 @@ export const sendReply = createServerFn({ method: 'POST' })
       if ([400, 409, 503].includes(response.status)) return { ok: false, error: (await response.json()).message }
     } catch { /* Preserve the draft and the request ID when delivery cannot be confirmed. */ }
     return { ok: false, error: 'Delivery could not be confirmed. Do not resend; inspect Sent and the mail server. Your draft is preserved.' }
+  })
+
+export const getAuthoring = createServerFn({ method: 'GET' }).handler(async (): Promise<import('../../shared/authoring').AuthoringSettings> => {
+  const response = await fetch(`${process.env.API_ORIGIN ?? 'http://127.0.0.1:4000'}/authoring`, { headers: apiHeaders(), signal: AbortSignal.timeout(15_000) })
+  if (!response.ok) throw new Error('Authoring settings unavailable.')
+  return response.json()
+})
+
+export const saveAuthoring = createServerFn({ method: 'POST' }).validator((input: unknown) => { if (!isAuthoringChange(input)) throw new Error('Invalid authoring settings.'); return input })
+  .handler(async ({ data }): Promise<{ ok: boolean; settings?: import('../../shared/authoring').AuthoringSettings; error?: string }> => {
+    const response = await fetch(`${process.env.API_ORIGIN ?? 'http://127.0.0.1:4000'}/authoring`, { method: 'PUT', headers: apiHeaders(), body: JSON.stringify(data), signal: AbortSignal.timeout(15_000) })
+    if (response.ok) return { ok: true, settings: await response.json() }
+    return { ok: false, error: (await response.json()).message ?? 'Settings could not be saved.' }
   })

@@ -28,3 +28,14 @@ test('mail configuration rejects plaintext transport and replies reject header i
   assert.equal(isReplyRequest({ ...reply, to: 'attacker@postfold.test' }), false)
   assert.equal(isReplyRequest({ ...reply, text: ' ' }), false)
 })
+
+test('rich replies validate attachment bytes, filenames and HTML bounds at the trust boundary', () => {
+  const reply = { id: 'mail', revision: 0, text: 'Hello', html: '<p><strong>Hello</strong></p>', requestId: crypto.randomUUID(), attachments: [{ filename: 'report.txt', contentType: 'text/plain', content: Buffer.from('test').toString('base64') }] }
+  assert.equal(isReplyRequest(reply), true)
+  for (const filename of ['../secret', 'file\\path', 'evil\r\nBcc: injected']) assert.equal(isReplyRequest({ ...reply, attachments: [{ ...reply.attachments[0], filename }] }), false)
+  assert.equal(isReplyRequest({ ...reply, attachments: [{ ...reply.attachments[0], content: 'invalid' }] }), false)
+  assert.equal(isReplyRequest({ ...reply, attachments: [{ ...reply.attachments[0], content: Buffer.alloc(10 * 1024 * 1024 + 1).toString('base64') }] }), false)
+  assert.equal(isReplyRequest({ ...reply, attachments: Array(11).fill(reply.attachments[0]) }), false)
+  assert.equal(isReplyRequest({ ...reply, attachments: [{ ...reply.attachments[0], path: '/etc/passwd' }] }), false)
+  assert.equal(isReplyRequest({ ...reply, html: 'x'.repeat(200_001) }), false)
+})

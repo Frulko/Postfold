@@ -1,11 +1,13 @@
-import { BadRequestException, ConflictException, type OnApplicationShutdown } from '@nestjs/common'
+import { BadRequestException, ConflictException, ForbiddenException, type OnApplicationShutdown } from '@nestjs/common'
 import { Pool } from 'pg'
 import { randomUUID } from 'node:crypto'
 import { isProjectSettings } from '../shared/projects.js'
 import type { Activity, ConversationState, ConversationUpdate, Member, ProjectSettings, Mailbox } from '../shared/mailbox.js'
 import { isActivityIds, isConversationUpdate } from '../shared/conversation-state.js'
 import { demoMailbox, demoMembers } from './demo-mailbox.js'
-import { authMode } from '../shared/auth.js'
+import { authMode, type Viewer } from '../shared/auth.js'
+import { isAuthoringChange, type AuthoringSettings, type EmailTemplate } from '../shared/authoring.js'
+import { cleanEmailHtml, emailPlainText } from './email-html.js'
 
 const stateColumns = `id, revision, unread, status, project_id AS "projectId", label_ids AS "labelIds", assignee_id AS "assigneeId",
   (SELECT name FROM postfold_mailbox_members m WHERE m.mailbox_id=demo_conversation_state.mailbox_id AND m.id=demo_conversation_state.assignee_id) AS assignee`
@@ -25,6 +27,10 @@ export class ProjectStore implements OnApplicationShutdown {
       id text NOT NULL, name text NOT NULL, email text NOT NULL, PRIMARY KEY (mailbox_id,id)
     )`)
     await this.pool.query('ALTER TABLE postfold_mailbox_members ADD COLUMN IF NOT EXISTS is_demo boolean NOT NULL DEFAULT false')
+    await this.pool.query("ALTER TABLE postfold_mailbox_members ADD COLUMN IF NOT EXISTS role text NOT NULL DEFAULT 'member', ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true, ADD COLUMN IF NOT EXISTS last_seen timestamptz NOT NULL DEFAULT now()")
+    await this.pool.query(`CREATE TABLE IF NOT EXISTS postfold_authoring (mailbox_id text PRIMARY KEY REFERENCES demo_project_settings(mailbox_id) ON DELETE CASCADE, revision integer NOT NULL DEFAULT 0, settings jsonb NOT NULL)`)
+    const demoAuthoring = this.seedMailbox === demoMailbox ? { templates: [{ id: 'demo-ack', name: 'Ticket received', scope: 'team', ownerId: 'demo-julie', html: '<p>Hello {{contact.name}},</p><p>We have received your request about <strong>{{subject}}</strong>. Our IT team is investigating and will keep you updated.</p>', text: 'Hello {{contact.name}},\nWe have received your request about {{subject}}. Our IT team is investigating and will keep you updated.' }], signatures: [{ id: 'demo-support', name: 'IT Support', html: '<table cellpadding="0" cellspacing="0"><tbody><tr><td style="border-left:3px solid #2563eb;padding:8px 12px;font-family:Arial;font-size:13px"><strong>IT Support Team</strong><br><span style="color:#64748b">Postfold · Service desk</span><br><a href="mailto:support@example.test">support@example.test</a></td></tr></tbody></table>', text: 'IT Support Team\nPostfold · Service desk\nsupport@example.test' }], assignments: Object.fromEntries(demoMembers.map(m => [m.id, 'demo-support'])) } : { templates: [], signatures: [], assignments: {} }
+    await this.pool.query('INSERT INTO postfold_authoring (mailbox_id,settings) VALUES ($1,$2) ON CONFLICT DO NOTHING', [this.mailboxId, demoAuthoring])
     if (this.seedMailbox === demoMailbox && authMode() === 'basic') for (const member of demoMembers) await this.members(member)
     await this.pool.query(`CREATE TABLE IF NOT EXISTS postfold_activity (
       mailbox_id text NOT NULL REFERENCES demo_project_settings(mailbox_id) ON DELETE CASCADE,
@@ -94,9 +100,71 @@ export class ProjectStore implements OnApplicationShutdown {
 
   async members(viewer?: Member): Promise<Member[]> {
     if (viewer) await this.pool.query(`INSERT INTO postfold_mailbox_members (mailbox_id,id,name,email,is_demo) VALUES ($1,$2,$3,$4,$5)
-      ON CONFLICT (mailbox_id,id) DO UPDATE SET name=EXCLUDED.name,email=EXCLUDED.email,is_demo=EXCLUDED.is_demo
-      WHERE postfold_mailbox_members.name IS DISTINCT FROM EXCLUDED.name OR postfold_mailbox_members.email IS DISTINCT FROM EXCLUDED.email OR postfold_mailbox_members.is_demo IS DISTINCT FROM EXCLUDED.is_demo`, [this.mailboxId, viewer.id, viewer.name, viewer.email, viewer.provider === 'demo'])
-    return (await this.pool.query<Member>('SELECT id,name,email FROM postfold_mailbox_members WHERE mailbox_id=$1 AND ($2::boolean OR NOT is_demo) ORDER BY lower(name),id', [this.mailboxId, authMode() === 'basic'])).rows
+      ON CONFLICT (mailbox_id,id) DO UPDATE SET name=EXCLUDED.name,email=EXCLUDED.email,is_demo=EXCLUDED.is_demo,last_seen=now()`, [this.mailboxId, viewer.id, viewer.name, viewer.email, viewer.provider === 'demo'])
+    return (await this.pool.query<Member>('SELECT id,name,email,role,active,last_seen AS "lastSeen" FROM postfold_mailbox_members WHERE mailbox_id=$1 AND ($2::boolean OR NOT is_demo) ORDER BY lower(name),id', [this.mailboxId, authMode() === 'basic'])).rows
+  }
+
+  async checkMemberAccess(viewer: Viewer) {
+    const members = await this.members(viewer)
+    if (!members.find(m => m.id === viewer.id)?.active) throw new ForbiddenException('Your mailbox access has been disabled by an administrator.')
+  }
+
+  private async canAdmin(actor: Member & { admin?: boolean }) {
+    return authMode() === 'basic' || actor.admin === true || (await this.members()).find(m => m.id === actor.id)?.role === 'admin'
+  }
+
+  async authoring(actor: Member & { admin?: boolean }): Promise<AuthoringSettings> {
+    const members = await this.members(actor)
+    const { rows } = await this.pool.query('SELECT revision,settings FROM postfold_authoring WHERE mailbox_id=$1', [this.mailboxId])
+    const config = rows[0].settings
+    const admin = await this.canAdmin(actor)
+    return { ...config, revision: rows[0].revision, templates: config.templates.filter((item: EmailTemplate) => item.scope === 'team' || item.ownerId === actor.id),
+      members: members.map(m => ({ ...m, ...(m.id === actor.id && admin ? { managedAdmin: actor.admin === true, role: 'admin' as const } : {}) })), currentMemberId: actor.id, canAdmin: admin }
+  }
+
+  async updateAuthoring(input: unknown, actor: Member & { admin?: boolean }) {
+    if (!isAuthoringChange(input)) throw new BadRequestException('Invalid authoring settings.')
+    const client = await this.pool.connect()
+    try {
+      await client.query('BEGIN')
+      const { rows } = await client.query('SELECT revision,settings FROM postfold_authoring WHERE mailbox_id=$1 FOR UPDATE', [this.mailboxId])
+      if (rows[0].revision !== input.revision) throw new ConflictException('These settings changed. Reload before retrying; your edits have been preserved.')
+      const admin = await this.canAdmin(actor)
+      const config: Pick<AuthoringSettings, 'templates' | 'signatures' | 'assignments'> = rows[0].settings
+      if (input.action === 'template' || input.action === 'delete-template') {
+        const id = input.action === 'template' ? input.item.id : input.id
+        const existing = config.templates.find(t => t.id === id)
+        if (existing && (existing.scope === 'team' ? !admin : existing.ownerId !== actor.id)) throw new ForbiddenException('You cannot edit this template.')
+        if (input.action === 'template') {
+          if (input.item.scope === 'team' && !admin) throw new ForbiddenException('Only administrators can manage team templates.')
+          if (!existing && config.templates.length >= 500) throw new BadRequestException('Template limit reached.')
+          const html = cleanEmailHtml(input.item.html)
+          if (!emailPlainText(html)) throw new BadRequestException('Template content is empty.')
+          config.templates = config.templates.filter(t => t.id !== id).concat({ ...input.item, name: input.item.name.trim(), html, text: emailPlainText(html), ownerId: input.item.scope === 'personal' ? actor.id : existing?.ownerId ?? actor.id })
+        } else config.templates = config.templates.filter(t => t.id !== id)
+      } else {
+        if (!admin) throw new ForbiddenException('Only administrators can manage signatures and members.')
+        if (input.action === 'signature') {
+          if (!config.signatures.some(s => s.id === input.item.id) && config.signatures.length >= 100) throw new BadRequestException('Signature limit reached.')
+          const html = cleanEmailHtml(input.item.html)
+          if (!html.trim()) throw new BadRequestException('Signature content is empty.')
+          config.signatures = config.signatures.filter(s => s.id !== input.item.id).concat({ ...input.item, name: input.item.name.trim(), html, text: emailPlainText(html) })
+        } else if (input.action === 'delete-signature') {
+          config.signatures = config.signatures.filter(s => s.id !== input.id)
+          config.assignments = Object.fromEntries(Object.entries(config.assignments).filter(([, signature]) => signature !== input.id))
+        } else if (input.action === 'member') {
+          if (input.id === actor.id && (!input.active || input.role !== 'admin')) throw new BadRequestException('You cannot remove your own administrator access.')
+          if (input.signatureId && !config.signatures.some(s => s.id === input.signatureId)) throw new BadRequestException('Signature no longer exists.')
+          const { rowCount } = await client.query('UPDATE postfold_mailbox_members SET role=$3,active=$4 WHERE mailbox_id=$1 AND id=$2 AND ($5::boolean OR NOT is_demo)', [this.mailboxId, input.id, input.role, input.active, authMode() === 'basic'])
+          if (!rowCount) throw new BadRequestException('Member not found.')
+          if (input.signatureId) config.assignments[input.id] = input.signatureId
+          else delete config.assignments[input.id]
+        }
+      }
+      await client.query('UPDATE postfold_authoring SET revision=revision+1,settings=$2 WHERE mailbox_id=$1', [this.mailboxId, config])
+      await client.query('COMMIT')
+      return this.authoring(actor)
+    } catch (error) { await client.query('ROLLBACK'); throw error } finally { client.release() }
   }
 
   async activity(ids: unknown): Promise<Activity[]> {
@@ -107,7 +175,7 @@ export class ProjectStore implements OnApplicationShutdown {
   }
 
   protected async checkAssignee(input: ConversationUpdate) {
-    if (input.assigneeId != null && !(await this.pool.query('SELECT 1 FROM postfold_mailbox_members WHERE mailbox_id=$1 AND id=$2 AND ($3::boolean OR NOT is_demo)', [this.mailboxId, input.assigneeId, authMode() === 'basic'])).rowCount) throw new BadRequestException('Ce collègue n’est pas connu dans cette boîte. Relevez puis réessayez.')
+    if (input.assigneeId != null && !(await this.pool.query('SELECT 1 FROM postfold_mailbox_members WHERE mailbox_id=$1 AND id=$2 AND active AND ($3::boolean OR NOT is_demo)', [this.mailboxId, input.assigneeId, authMode() === 'basic'])).rowCount) throw new BadRequestException('Ce collègue n’est pas connu dans cette boîte. Relevez puis réessayez.')
   }
 
   async updateConversations(input: unknown, actor?: Member): Promise<ConversationState[]> {

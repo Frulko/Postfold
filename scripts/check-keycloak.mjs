@@ -39,7 +39,7 @@ try {
   writeFileSync(join(directory, 'realm.json'), JSON.stringify({
     realm, enabled: true, sslRequired: 'none', accessTokenLifespan: 60, revokeRefreshToken: true, refreshTokenMaxReuse: 0,
     registrationAllowed: false, loginWithEmailAllowed: true,
-    roles: { client: { postfold: [{ name: 'support' }] } },
+    roles: { client: { postfold: [{ name: 'support' }, { name: 'support-admin' }] } },
     clients: [{ clientId: 'postfold', enabled: true, protocol: 'openid-connect', publicClient: false, secret: 'test-only-keycloak-secret', standardFlowEnabled: true,
       directAccessGrantsEnabled: false, redirectUris: [publicOrigin + '/auth/callback'], webOrigins: [publicOrigin], defaultClientScopes: ['basic', 'profile', 'email', 'roles'],
       attributes: { 'pkce.code.challenge.method': 'S256', 'post.logout.redirect.uris': publicOrigin + '/auth/logged-out' },
@@ -47,7 +47,7 @@ try {
     }],
     users: ['alice', 'bob', 'charlie'].map((username) => ({ username, enabled: true, email: username + '@postfold.test', emailVerified: true,
       firstName: username[0].toUpperCase() + username.slice(1), lastName: 'Support', credentials: [{ type: 'password', value: 'test-only-user-password', temporary: false }],
-      clientRoles: username !== 'bob' ? { postfold: ['support'] } : {},
+      clientRoles: username !== 'bob' ? { postfold: username === 'alice' ? ['support', 'support-admin'] : ['support'] } : {},
     })),
   }))
   Object.assign(process.env, { DATABASE_URL: database, POSTFOLD_AUTH: 'keycloak', POSTFOLD_ORIGIN: publicOrigin, KEYCLOAK_ISSUER: issuer,
@@ -142,6 +142,26 @@ try {
   const teammateCookie = JSON.parse(readFileSync(statePath, 'utf8')).cookies.find((item) => item.name === 'postfold-session')
   const teammateHeaders = { Cookie: 'postfold-session=' + teammateCookie.value }
   sessionIds.push(digest(teammateCookie.value))
+  const authoring = credentials => fetch(origin + '/authoring', { headers: credentials })
+  const editAuthoring = (body, credentials = headers) => fetch(origin + '/authoring', { method: 'PUT', headers: { ...credentials, Origin: publicOrigin, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  let authoringConfig = await (await authoring(headers)).json()
+  assert.equal(authoringConfig.canAdmin, true, 'The administrator role must come from a verified Keycloak token')
+  assert.equal((await (await authoring({ Cookie: 'postfold-session=' + teammateCookie.value })).json()).canAdmin, false)
+  const colleagueHeaders = { Cookie: 'postfold-session=' + teammateCookie.value }
+  const unauthorizedSignature = await editAuthoring({ revision: authoringConfig.revision, action: 'signature', item: { id: 'unauthorized', name: 'Unsafe', html: '<p>Unauthorized</p>' } }, colleagueHeaders)
+  assert.equal(unauthorizedSignature.status, 403)
+  const signatureResponse = await editAuthoring({ revision: authoringConfig.revision, action: 'signature', item: { id: 'sso-signature', name: 'Team support', html: '<p><strong>Verified IT support</strong></p>' } })
+  assert.equal(signatureResponse.status, 200); authoringConfig = await signatureResponse.json()
+  const teammateIdentity = (await (await authoring(colleagueHeaders)).json()).currentMemberId
+  const memberChange = { action: 'member', id: teammateIdentity, role: 'member', active: false, signatureId: 'sso-signature' }
+  const blocked = await editAuthoring({ ...memberChange, revision: authoringConfig.revision })
+  assert.equal(blocked.status, 200); authoringConfig = await blocked.json()
+  assert.equal((await fetch(origin + '/demo/mailbox', { headers: colleagueHeaders })).status, 403)
+  assert.equal((await authoring(colleagueHeaders)).status, 403)
+  const restored = await editAuthoring({ ...memberChange, active: true, revision: authoringConfig.revision })
+  assert.equal(restored.status, 200)
+  assert.equal((await authoring(colleagueHeaders)).status, 200)
+  console.info('Verified Keycloak administrator role, protected signatures, member access revocation and restoration: passed')
   let shared = await (await fetch(origin + '/demo/mailbox', { headers })).json()
   assert.equal(shared.currentMemberId, viewer.id)
   assert.equal(shared.members.length, 2, 'Only authorized users who visited the mailbox appear in its directory')

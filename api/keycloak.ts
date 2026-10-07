@@ -87,7 +87,7 @@ export class KeycloakSessions {
     const roles = (payload.resource_access as Record<string, { roles?: unknown }> | undefined)?.[this.clientId]?.roles
     if (!Array.isArray(roles) || !roles.includes(this.role)) throw new ForbiddenException('Your Keycloak account does not have access to this mailbox.')
     return { viewer: { id: payload.sub, name: typeof payload.name === 'string' ? payload.name : typeof payload.preferred_username === 'string' ? payload.preferred_username : payload.sub,
-      email: typeof payload.email === 'string' ? payload.email : '', provider: 'keycloak' }, expiresAt: payload.exp! * 1000 }
+      email: typeof payload.email === 'string' ? payload.email : '', provider: 'keycloak', admin: roles.includes(process.env.KEYCLOAK_ADMIN_ROLE ?? 'support-admin') }, expiresAt: payload.exp! * 1000 }
   }
 
   async callback(header: string | undefined, query: string) {

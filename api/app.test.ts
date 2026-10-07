@@ -174,3 +174,48 @@ test('shared filing and label cleanup preserve hierarchy and reject unsafe delet
     await cleanup.end()
   }
 })
+
+test('authoring persists templates and safe HTML signatures with ownership, revisions and member access controls', async () => {
+  const mailboxId = `authoring-${crypto.randomUUID()}`
+  const store = new ProjectStore(mailboxId)
+  const actor = { id: 'owner', name: 'Owner', email: 'owner@example.test', provider: 'keycloak' as const, admin: true }
+  const colleague = { id: 'colleague', name: 'Colleague', email: 'colleague@example.test', provider: 'keycloak' as const }
+  const oldMode = process.env.POSTFOLD_AUTH
+  try {
+    process.env.POSTFOLD_AUTH = 'keycloak'
+    await store.init(); await store.members(actor); await store.members(colleague)
+    let config = await store.authoring(actor)
+    config = await store.updateAuthoring({ revision: config.revision, action: 'template', item: { id: 'private', name: 'Private', scope: 'personal', html: '<p>Hello {{contact.name}}</p>' } }, actor)
+    assert.ok(!(await store.authoring(colleague)).templates.some(t => t.id === 'private'))
+    await assert.rejects(store.updateAuthoring({ revision: config.revision, action: 'template', item: { id: 'private', name: 'Forged', scope: 'personal', html: '<p>Stolen</p>' } }, colleague), /cannot edit/)
+    await assert.rejects(store.updateAuthoring({ revision: config.revision, action: 'template', item: { id: 'team', name: 'Team', scope: 'team', html: '<p>Shared</p>' } }, colleague), /administrators/)
+    config = await store.updateAuthoring({ revision: config.revision, action: 'signature', item: { id: 'sig', name: 'Support', html: '<table style="font-family:Arial"><tr><td style="color:#2563eb;position:fixed"><strong>Support</strong><script>alert(1)</script><img src="javascript:alert(1)" onerror="alert(1)"><a href="javascript:alert(1)">Bad</a></td></tr></table>' } }, actor)
+    const signature = config.signatures.find(s => s.id === 'sig')!
+    assert.ok(signature.html.includes('<table')); assert.ok(signature.html.includes('color:#2563eb'))
+    assert.ok(!/script|javascript|onerror|position/.test(signature.html))
+    const stale = config.revision - 1
+    await assert.rejects(store.updateAuthoring({ revision: stale, action: 'delete-signature', id: 'sig' }, actor), /settings changed/)
+    await assert.rejects(store.updateAuthoring({ revision: config.revision, action: 'member', id: 'owner', role: 'member', active: false, signatureId: null }, actor), /own administrator/)
+    await assert.rejects(store.updateAuthoring({ revision: config.revision, action: 'member', id: 'colleague', role: 'admin', active: true, signatureId: 'sig' }, colleague), /administrators/)
+    config = await store.updateAuthoring({ revision: config.revision, action: 'member', id: 'colleague', role: 'member', active: false, signatureId: 'sig' }, actor)
+    assert.equal(config.assignments.colleague, 'sig')
+    await assert.rejects(store.checkMemberAccess(colleague), /disabled/)
+    assert.equal((await store.members(colleague)).find(m => m.id === colleague.id)?.active, false, 'A login must not reactivate a disabled member')
+    config = await store.updateAuthoring({ revision: config.revision, action: 'member', id: 'colleague', role: 'admin', active: true, signatureId: 'sig' }, actor)
+    assert.equal((await store.authoring(colleague)).canAdmin, true)
+    config = await store.updateAuthoring({ revision: config.revision, action: 'template', item: { id: 'shared-to-personal', name: 'Shared', scope: 'team', html: '<p>Shared response</p>' } }, actor)
+    const converted = await store.updateAuthoring({ revision: config.revision, action: 'template', item: { id: 'shared-to-personal', name: 'Now mine', scope: 'personal', html: '<p>Personal response</p>' } }, colleague)
+    assert.equal(converted.templates.find(t => t.id === 'shared-to-personal')?.ownerId, colleague.id)
+    config = await store.authoring(actor)
+    assert.ok(!config.templates.some(t => t.id === 'shared-to-personal'))
+    config = await store.updateAuthoring({ revision: config.revision, action: 'delete-signature', id: 'sig' }, actor)
+    assert.equal(config.assignments.colleague, undefined)
+    const reader = new ProjectStore(mailboxId)
+    try { await reader.init(); assert.deepEqual((await reader.authoring(actor)).templates, config.templates) } finally { await reader.onApplicationShutdown() }
+  } finally {
+    if (oldMode === undefined) delete process.env.POSTFOLD_AUTH; else process.env.POSTFOLD_AUTH = oldMode
+    await store.onApplicationShutdown()
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL ?? 'postgresql://mailer_demo:mailer_demo@127.0.0.1:55432/mailer_support' })
+    try { await pool.query('DELETE FROM demo_project_settings WHERE mailbox_id=$1', [mailboxId]) } finally { await pool.end() }
+  }
+})

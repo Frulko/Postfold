@@ -15,7 +15,9 @@ A familiar email interface with project folders, conversation tracking and conta
 - All-message or threaded view, saved newest/oldest ordering and direct reply controls.
 - Read/unread and workflow states, individually or in batches.
 - First-gesture drag-and-drop and batch actions that keep the list stable.
-- Multiple thread participants, individual contact notes and saved drafts.
+- Multiple thread participants, individual contact notes and saved rich drafts.
+- Personal/team email templates, HTML signatures and a team management dashboard.
+- Rich text replies, previews and draft attachments with real multipart SMTP sending.
 - Viewport layout with fixed headers and independent panel scrolling.
 - French/English interface, IT support demo, search and automatic refresh.
 - Optional IMAP/SMTP connection, encrypted credentials and duplicate-send protection.
@@ -39,7 +41,7 @@ Open **http://127.0.0.1:3002**. PostgreSQL and the separate API start automatica
 
 ## Deploy and update
 
-[Public releases](https://github.com/Frulko/Postfold/releases) include compiled builds, Docker images (AMD64/ARM64) and deployment configuration. Follow [Docker deployment and updates](docs/docker.md), or use [Linux/systemd](docs/self-hosting.md). CI validates real mail, Keycloak and production containers before publishing.
+[Public releases](https://github.com/Frulko/Postfold/releases) include compiled builds, Docker images (AMD64/ARM64) and deployment configuration. Follow [Docker deployment and updates](docs/docker.md), or use [Linux/systemd](docs/self-hosting.md). CI validates real mail, Keycloak, rich authoring, responsive layouts and production containers before publishing.
 
 ## Development
 
@@ -51,4 +53,4 @@ pnpm build
 
 With the dev server running and `agent-browser` installed, `pnpm test:drag` checks native drag-and-drop; `pnpm test:viewport` checks 13 screen sizes, long threads, saved sorting and participant notes.
 
-[Contributing](CONTRIBUTING.md) · [Technical guide](docs/guide.md) · [Self-hosting](docs/self-hosting.md) · [AGPL-3.0-only license](LICENSE)
+[Writing and team management](docs/authoring.md) · [Contributing](CONTRIBUTING.md) · [Technical guide](docs/guide.md) · [Self-hosting](docs/self-hosting.md) · [AGPL-3.0-only license](LICENSE)

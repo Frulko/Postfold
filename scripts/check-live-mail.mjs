@@ -165,12 +165,22 @@ try {
   console.info('Bounded multi-cycle import preserves annotations during large native moves: passed')
   peer = new MailStore(accountId)
   await peer.init()
-  const reply = { id: received.id, revision: state().revision, text: 'VPN access has been restored.', requestId: randomUUID() }
+  const reply = { id: received.id, revision: state().revision, text: 'VPN access has been restored.', html: '<p><strong>VPN access</strong> has been restored.</p><script>unsafe()</script>', attachments: [{ filename: 'vpn-checklist.txt', contentType: 'text/plain', content: Buffer.from('Update the client, then reconnect.').toString('base64') }], requestId: randomUUID() }
   const outcomes = await Promise.allSettled([store.reply(reply, supportActor), peer.reply({ ...reply, requestId: randomUUID() }, supportActor)])
   assert.equal(outcomes.filter((item) => item.status === 'fulfilled').length, 1)
   assert.equal(outcomes.filter((item) => item.status === 'rejected').length, 1)
   const accepted = outcomes[0].status === 'fulfilled' ? reply : null
-  if (accepted) assert.deepEqual(await store.reply(accepted), outcomes[0].value)
+  if (accepted) {
+    assert.deepEqual(await store.reply(accepted), outcomes[0].value)
+    await assert.rejects(store.reply({ ...accepted, html: '<p>A different reply</p>' }), /different reply/)
+    await assert.rejects(store.reply({ ...accepted, attachments: [{ ...accepted.attachments[0], content: Buffer.from('changed').toString('base64') }] }), /different reply/)
+  }
+  const richSentClient = new ImapFlow({ host: 'localhost', port: imapPort, secure: true, auth: { user: 'support', pass: 'test-only-mail-password' }, tls, logger: false })
+  try {
+    await richSentClient.connect(); const lock = await richSentClient.getMailboxLock('Sent')
+    try { const raw = await richSentClient.fetchOne('1', { source: true }); assert.ok(raw); const parsed = await (await import('mailparser')).simpleParser(raw.source); assert.ok(parsed.html.includes('<strong>VPN access</strong>')); assert.ok(!parsed.html.includes('<script>')); assert.equal(parsed.attachments.length, 1); assert.equal(parsed.attachments[0].filename, 'vpn-checklist.txt'); assert.equal(parsed.attachments[0].content.toString(), 'Update the client, then reconnect.'); assert.equal(parsed.to.value[0].address, 'customer@postfold.test') } finally { lock.release() }
+  } finally { await richSentClient.logout().catch(() => richSentClient.close()) }
+  console.info('Sanitized multipart HTML, exact attachment bytes and full-payload idempotency: passed')
   await assert.rejects(store.reply({ ...reply, requestId: randomUUID() }))
   assert.deepEqual((await store.mailbox()).conversations.find(item => item.outgoing).participants.map(person => person.email), ['customer@postfold.test'], 'A direct reply must not claim the original Cc received it')
   mailbox = await store.sync()
@@ -222,6 +232,15 @@ try {
   try { await sentClient.connect(); await sentClient.append('Sent', nativeReply.message, ['\\Seen']) } finally { await sentClient.logout().catch(() => sentClient.close()) }
   await assert.rejects(store.reply({ id: nativeTarget.id, revision: mailbox.conversationStates.find((item) => item.id === nativeTarget.id).revision, text: 'Duplicate reply must be blocked.', requestId: randomUUID() }), /another mail client/)
   console.info('Native-client replies with only In-Reply-To prevent a duplicate app reply: passed')
+  await smtp.sendMail({ from: 'customer@postfold.test', to: account.email, subject: 'Large diagnostic report', text: 'Please attach the diagnostic archive.', messageId: `<${randomUUID()}@postfold.test>` })
+  mailbox = await store.sync()
+  const largeTarget = mailbox.conversations.find(item => item.subject === 'Large diagnostic report')
+  const largeReply = { id: largeTarget.id, revision: mailbox.conversationStates.find(item => item.id === largeTarget.id).revision, text: 'The diagnostic archive is attached.', requestId: randomUUID(), html: '<p>The diagnostic archive is attached.</p>', attachments: [{ filename: 'diagnostics.bin', contentType: 'application/octet-stream', content: Buffer.alloc(8 * 1024 * 1024, 42).toString('base64') }] }
+  await store.reply(largeReply, supportActor)
+  mailbox = await store.sync()
+  const largeSent = mailbox.conversations.find(item => item.id === `sent_${largeReply.requestId}`)
+  assert.equal(largeSent.imapReady, true, 'A sent MIME copy above 10 MiB must still synchronize within the 16 MiB import bound')
+  console.info('Large attachment MIME overhead and native Sent synchronization: passed')
   app = await createApp(false, '', true)
   await app.listen(0, '127.0.0.1')
   const origin = await app.getUrl()
@@ -232,6 +251,15 @@ try {
   assert.equal(authorized.status, 200)
   assert.equal(authorized.headers.get('cache-control'), 'private, no-store')
   assert.ok(!JSON.stringify(await authorized.json()).includes('test-only-mail-password'))
+  let largeApiResult
+  for (let retry = 0; retry < 30; retry++) {
+    const replayLarge = await fetch(origin + '/mailbox/reply', { method: 'POST', headers: { Authorization: 'Basic ' + Buffer.from('operator:test-only-access-password').toString('base64'), 'Content-Type': 'application/json' }, body: JSON.stringify(largeReply) })
+    largeApiResult = await replayLarge.json()
+    if (replayLarge.status === 409 && largeApiResult.message === 'Mailbox operation in progress; refresh before retrying.') { await delay(200); continue }
+    assert.equal(replayLarge.status, 201, 'Authenticated API must accept bounded base64 attachment payloads above the default 100 KB JSON limit')
+    break
+  }
+  assert.equal(largeApiResult.status, 'sent')
   if (process.env.MAIL_TEST_WEB === 'true') {
     const { createServer } = await import('node:net')
     const allocation = createServer()

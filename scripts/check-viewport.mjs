@@ -43,7 +43,8 @@ try {
   click('.thread-participants button:nth-of-type(2)')
   assert.equal(evaluate('document.querySelector("#contact-note").value'), 'Claire-specific draft')
   click('.reply-bar button')
-  assert.match(evaluate('document.querySelector(".composer label").textContent'), /paul\.martin@example\.test/)
+  browser('wait', '.composer-heading')
+  assert.match(evaluate('document.querySelector(".composer-heading").textContent'), /paul\.martin@example\.test/)
 
   for (const [width, height] of [[1920,1080], [1440,900], [1280,720], [1024,768], [900,600], [820,900], [768,1024], [390,844], [360,640], [320,568], [844,390], [667,375], [1024,400]]) {
     browser('set', 'viewport', String(width), String(height))

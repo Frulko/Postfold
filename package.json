@@ -26,7 +26,8 @@
     "mailbox:configure": "pnpm build:api && node api/dist/api/configure-mailbox.js",
     "test:drag": "node scripts/check-mail-drag.mjs",
     "test:viewport": "node scripts/check-viewport.mjs",
-    "test:container": "node scripts/check-container.mjs"
+    "test:container": "node scripts/check-container.mjs",
+    "test:authoring": "pnpm db:up && pnpm build && node scripts/check-authoring.mjs"
   },
   "dependencies": {
     "@nestjs/common": "12.1.2",
@@ -34,6 +35,12 @@
     "@nestjs/platform-express": "12.1.2",
     "@tanstack/react-router": "1.170.41",
     "@tanstack/react-start": "1.168.60",
+    "@tiptap/core": "3.31.4",
+    "@tiptap/extension-image": "3.31.4",
+    "@tiptap/extension-table": "3.31.4",
+    "@tiptap/pm": "3.31.4",
+    "@tiptap/react": "3.31.4",
+    "@tiptap/starter-kit": "3.31.4",
     "imapflow": "2.2.6",
     "jose": "6.2.12",
     "mailparser": "3.9.36",
@@ -44,7 +51,8 @@
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "reflect-metadata": "0.2.2",
-    "rxjs": "7.8.2"
+    "rxjs": "7.8.2",
+    "sanitize-html": "2.18.0"
   },
   "devDependencies": {
     "@types/mailparser": "3.9.0",
@@ -53,6 +61,7 @@
     "@types/pg": "8.23.1",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
+    "@types/sanitize-html": "2.16.2",
     "@vitejs/plugin-react": "6.1.2",
     "concurrently": "10.0.5",
     "typescript": "7.0.2",

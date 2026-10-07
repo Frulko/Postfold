@@ -32,7 +32,7 @@ export type ProjectSettings = {
   sort: import('./projects.js').ProjectSort
   labels?: Label[]
 }
-export type Member = { id: string; name: string; email: string; provider?: 'demo' | 'keycloak' }
+export type Member = { id: string; name: string; email: string; provider?: 'demo' | 'keycloak'; role?: 'admin' | 'member'; active?: boolean; lastSeen?: string; managedAdmin?: boolean }
 export type Activity = { id: string; conversationId: string; createdAt: string; actor: Pick<Member, 'id' | 'name'> | null; kind: 'updated' | 'reply'; data: { before?: ConversationState; after?: ConversationState; status?: 'sending' | 'sent' | 'uncertain' } }
 export type ConversationState = Pick<Conversation, 'id' | 'unread' | 'status'> & { revision: number; projectId?: string; labelIds?: string[]; assigneeId?: string | null; assignee?: string | null }
 export type ConversationPatch = Partial<Pick<Conversation, 'unread' | 'status' | 'projectId' | 'assigneeId'>> & { addLabelIds?: string[]; removeLabelIds?: string[] }

@@ -30,6 +30,7 @@ services:
       KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-}
       KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-postfold}
       KEYCLOAK_REQUIRED_ROLE: ${KEYCLOAK_REQUIRED_ROLE:-support}
+      KEYCLOAK_ADMIN_ROLE: ${KEYCLOAK_ADMIN_ROLE:-support-admin}
       KEYCLOAK_CLIENT_SECRET_FILE: /run/postfold/secrets/keycloak-client.secret
       MAILBOX_KEY_FILE: /run/postfold/secrets/mailbox.key
       MAILBOX_KEY_ID: ${MAILBOX_KEY_ID:-v1}
