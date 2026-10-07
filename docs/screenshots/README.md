@@ -5,7 +5,7 @@ These PNGs are captured from the running Postfold application, not generated moc
 | File | Highlight | Capture size |
 | --- | --- | --- |
 | `inbox-overview.png` | Project folders, search/filters, reader and contact context | 1440 × 1040 |
-| `conversation-thread.png` | Three-message support thread with expandable replies | 1440 × 1040 |
+| `conversation-thread.png` | Eighteen-message SSO incident, newest/oldest sorting and three participant profiles | 1440 × 1040 |
 | `all-messages.png` | Individual mail list and direct reply controls | 1440 × 1040 |
 | `batch-actions.png` | Two selected conversations, state actions and destination search | 1440 × 1040 |
 | `folder-drop-target.png` | Two source rows during a real drag and highlighted destination | 1440 × 1040 |
@@ -17,7 +17,8 @@ These PNGs are captured from the running Postfold application, not generated moc
 | `live-mailbox.png` | Authenticated IMAP inbox, native folders and enabled SMTP reply | 1440 × 1040 |
 | `keycloak-session.png` | Individual Keycloak identity, shared demo inbox and Sign out | 1440 × 1040 |
 | `assignment-and-activity.png` | Shared assignment, teammate initials and recorded actions by authenticated Keycloak users | 1440 × 1200 |
-| `mobile-inbox.png` | Narrow layout and stable batch selection toolbar | 390 × 900 |
+| `mobile-inbox.png` | Fixed header, compact navigation and independently scrollable mail list | 390 × 900 |
+| `mobile-thread.png` | Long thread below the fixed mobile header, message order and individual senders | 390 × 900 |
 
 ## Refreshing captures
 

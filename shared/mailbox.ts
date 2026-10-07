@@ -8,6 +8,7 @@ export type Conversation = {
   threadId?: string
   sentAt?: string
   sender?: { name: string; email: string }
+  participants?: Pick<Contact, 'name' | 'email'>[]
   subject: string
   preview: string
   body: string

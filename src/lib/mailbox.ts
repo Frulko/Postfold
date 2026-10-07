@@ -1,4 +1,4 @@
-import type { Conversation, Mailbox, Project } from '../../shared/mailbox'
+import type { Contact, Conversation, Mailbox, Project } from '../../shared/mailbox'
 export type { Project, Contact, Conversation, Mailbox } from '../../shared/mailbox'
 import { projectPath } from '../../shared/projects.ts'
 
@@ -15,7 +15,7 @@ export function filterConversations(mailbox: Mailbox, projectId: string | null, 
     if (projectId && conversation.projectId !== projectId && !projectPath(mailbox.projects, conversation.projectId).startsWith(`${projectPath(mailbox.projects, projectId)} /`)) return false
     const contact = mailbox.contacts.find((item) => item.id === conversation.contactId)
     return searchable([conversation.subject, conversation.preview, contact?.name, contact?.email,
-      contact?.company, conversation.sender?.name, conversation.sender?.email, conversation.projectId, projectPath(mailbox.projects, conversation.projectId)].join(' ')).includes(needle)
+      contact?.company, conversation.sender?.name, conversation.sender?.email, ...(conversation.participants ?? []).flatMap((person) => [person.name, person.email]), conversation.projectId, projectPath(mailbox.projects, conversation.projectId)].join(' ')).includes(needle)
   })
 }
 
@@ -37,7 +37,19 @@ export function moveConversations(mailbox: Mailbox, ids: string[], projectId: st
 }
 
 export const threadKey = (message: Conversation) => message.threadId ?? message.id
-export function mailboxRows(messages: Conversation[], mode: 'messages' | 'threads') {
+export const includesContact = (message: Conversation, contact: Contact) => message.contactId === contact.id ||
+  message.participants?.some(person => person.email.toLowerCase() === contact.email.toLowerCase()) === true
+export type MailOrder = 'newest' | 'oldest'
+export const compareMessages = (a: Conversation, b: Conversation, order: MailOrder = 'newest') =>
+  ((Date.parse(a.sentAt ?? '') || 0) - (Date.parse(b.sentAt ?? '') || 0)) * (order === 'oldest' ? 1 : -1)
+
+export function threadContacts(mailbox: Mailbox, messages: Conversation[]) {
+  const ids = new Set(messages.map((message) => message.contactId))
+  const emails = new Set(messages.flatMap((message) => [message.sender?.email, ...(message.participants ?? []).map((person) => person.email)]).filter(Boolean).map((email) => email!.toLowerCase()))
+  return mailbox.contacts.filter((person) => ids.has(person.id) || emails.has(person.email.toLowerCase()))
+}
+
+export function mailboxRows(messages: Conversation[], mode: 'messages' | 'threads', order: MailOrder = 'newest') {
   const groups = new Map<string, Conversation[]>()
   for (const message of messages) {
     const key = mode === 'threads' ? threadKey(message) : message.id
@@ -51,5 +63,5 @@ export function mailboxRows(messages: Conversation[], mode: 'messages' | 'thread
     const latest = ordered.at(-1)!
     return { ...first, time: latest.time, preview: latest.preview, unread: items.some((item) => item.unread),
       labelIds: [...new Set(items.flatMap((item) => item.labelIds ?? []))], messageIds: ordered.map((item) => item.id), latestAt: latest.sentAt ?? '' }
-  }).sort((a, b) => (Date.parse(b.latestAt) || 0) - (Date.parse(a.latestAt) || 0))
+  }).sort((a, b) => ((Date.parse(a.latestAt) || 0) - (Date.parse(b.latestAt) || 0)) * (order === 'oldest' ? 1 : -1))
 }

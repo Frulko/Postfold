@@ -12,10 +12,11 @@ A familiar email interface with project folders, conversation tracking and conta
 
 - Shared folder trees, colors, drag-and-drop ordering and sorting.
 - Shared labels: create, edit, filter and assign individually or in batches.
-- All-message or threaded conversation view, with direct reply controls.
+- All-message or threaded view, saved newest/oldest ordering and direct reply controls.
 - Read/unread and workflow states, individually or in batches.
 - First-gesture drag-and-drop and batch actions that keep the list stable.
-- Contacts, conversation history, notes and saved drafts.
+- Multiple thread participants, individual contact notes and saved drafts.
+- Viewport layout with fixed headers and independent panel scrolling.
 - French/English interface, IT support demo, search and automatic refresh.
 - Optional IMAP/SMTP connection, encrypted credentials and duplicate-send protection.
 - Keycloak SSO with individual sessions and client-role access control.
@@ -48,6 +49,6 @@ pnpm test
 pnpm build
 ```
 
-With the dev server running and `agent-browser` installed, `pnpm test:drag` checks native drag-and-drop and list stability.
+With the dev server running and `agent-browser` installed, `pnpm test:drag` checks native drag-and-drop; `pnpm test:viewport` checks 13 screen sizes, long threads, saved sorting and participant notes.
 
 [Contributing](CONTRIBUTING.md) · [Technical guide](docs/guide.md) · [Self-hosting](docs/self-hosting.md) · [AGPL-3.0-only license](LICENSE)

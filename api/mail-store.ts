@@ -113,7 +113,12 @@ export class MailStore extends ProjectStore {
     for (const message of conversations) {
       const source = message as CachedMessage['data']
       const email = source.replyTo ?? source.sender?.email ?? ''
-      contacts.set(message.contactId, { id: message.contactId, name: source.outgoing ? email : source.sender?.name || email, email, company: '', phone: '' })
+      if (!contacts.has(message.contactId)) contacts.set(message.contactId, { id: message.contactId, name: source.outgoing ? email : source.sender?.name || email, email, company: '', phone: '' })
+      for (const person of message.participants ?? []) {
+        const id = `c_${hash(person.email.toLowerCase())}`
+        const previous = contacts.get(id)
+        if (!previous || previous.name === previous.email) contacts.set(id, { ...person, id, company: '', phone: '' })
+      }
     }
     const { projects, ...projectSettings } = settings
     return { projects, projectSettings, labels: settings.labels ?? [], conversations, contacts: [...contacts.values()], conversationStates,
@@ -204,6 +209,11 @@ export class MailStore extends ProjectStore {
         const outgoing = sender?.address?.toLowerCase() === this.account.email.toLowerCase()
         const recipient = outgoing ? (Array.isArray(parsed.to) ? parsed.to[0] : parsed.to)?.value[0] : parsed.replyTo?.value[0] ?? sender
         const email = recipient?.address ?? ''
+        // Visible headers only: never expose Bcc as a conversation participant.
+        const addresses = [parsed.from, parsed.to, parsed.cc, parsed.replyTo].flatMap((header) => !header ? [] :
+          Array.isArray(header) ? header.flatMap((group) => group.value) : header.value)
+        const participants = [...new Map(addresses.filter((person) => isMailAddress(person.address) && person.address.toLowerCase() !== this.account.email.toLowerCase())
+          .map((person) => [person.address!.toLowerCase(), { name: person.name || person.address!, email: person.address! }])).values()]
         const rawId = parsed.messageId ?? null
         const moved = oldMessages.filter((row) => rawId && row.raw_id === rawId && !liveSlots.has(slot(row.path, row.validity, Number(row.uid))) && !staged.some((next) => next.id === row.id))
         const references = [...(typeof parsed.references === 'string' ? [parsed.references] : parsed.references ?? []), ...(parsed.inReplyTo ? [parsed.inReplyTo] : [])]
@@ -215,6 +225,7 @@ export class MailStore extends ProjectStore {
         const data: CachedMessage['data'] = { id: sentId ?? (moved.length === 1 ? moved[0].id : randomUUID()), projectId: id, contactId: `c_${hash(email.toLowerCase())}`,
           threadId: sentCopy?.threadId ?? hash(references[0] ?? parsed.inReplyTo ?? rawId ?? randomUUID()), sentAt,
           sender: { name: sender?.name || sender?.address || 'Unknown sender', email: sender?.address ?? '' },
+          participants,
           subject: parsed.subject ?? '(No subject)', preview: body.replace(/\s+/g, ' ').slice(0, 200), body,
           time: sentAt.slice(0, 10), status: outgoing ? 'waiting' : 'open', assignee: null, unread, labelIds: [], outgoing, imapReady: true, replyTo: email, references,
           receivedAt: new Date(item.message.internalDate || date).toISOString(), ...(rawId ? { messageId: rawId } : {}) }
@@ -387,6 +398,7 @@ export class MailStore extends ProjectStore {
       const date = new Date()
       const outgoing: CachedMessage['data'] = { ...message, id: `sent_${input.requestId}`, messageId, outgoing: true, imapReady: false,
         subject: /^re:/i.test(message.subject) ? message.subject : `Re: ${message.subject}`, sentAt: date.toISOString(), time: date.toISOString().slice(0, 10),
+        participants: [{ name: message.participants?.find(person => person.email.toLowerCase() === message.replyTo!.toLowerCase())?.name ?? message.replyTo, email: message.replyTo }],
         sender: { name: this.account.name || this.account.email, email: this.account.email }, preview: input.text.replace(/\s+/g, ' ').slice(0, 200), body: input.text, unread: false }
       const generated = await nodemailer.createTransport({ streamTransport: true, buffer: true }).sendMail({
         from: { name: this.account.name, address: this.account.email }, to: message.replyTo, subject: outgoing.subject, text: input.text, date, messageId,

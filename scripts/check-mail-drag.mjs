@@ -10,7 +10,8 @@ const row = (id) => `[data-conversation-id="${id}"]`
 const tops = () => evaluate('[...document.querySelectorAll(".thread-row")].map(e => e.getBoundingClientRect().top + scrollY)')
 const placements = () => evaluate('Object.fromEntries([...document.querySelectorAll(".thread-row")].map(e=>[e.dataset.conversationId,e.dataset.folderId]))')
 const check = (id) => browser('check', `${row(id)} input`)
-const point = (selector) => evaluate(`(() => { const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}; })()`)
+const reveal = (selector) => evaluate(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'nearest',inline:'nearest'})`)
+const point = (selector) => { reveal(selector); return evaluate(`(() => { const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}; })()`) }
 const origin = process.env.API_ORIGIN ?? 'http://127.0.0.1:4000'
 const mailbox = async () => { const r = await fetch(`${origin}/demo/mailbox`); assert.equal(r.status, 200); return r.json() }
 const original = await mailbox()
@@ -51,6 +52,7 @@ try {
     type, id:e.target.closest('[data-project-id]')?.dataset.projectId,
     count:document.querySelector('.drag-ghost:not([hidden]) .ghost-count')?.textContent
   }))`)
+  reveal(row('quote'))
   const before = tops()
   check('quote')
   assert.deepEqual(tops(), before, 'Selection must keep the list stable')
@@ -91,6 +93,7 @@ try {
   assert.equal(evaluate('document.querySelectorAll(".thread-row input:checked").length'), 1, 'Canceling preserves selection')
   browser('click', '.clear-selection')
   browser('set', 'viewport', '320', '900')
+  reveal(row('quote'))
   const mobile = tops()
   check('quote')
   browser('click', '.bulk-trigger')

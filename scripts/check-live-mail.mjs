@@ -76,7 +76,7 @@ try {
   console.info('Certificate-validated TLS and refusal to downgrade when STARTTLS is unavailable: passed')
   await assert.rejects(nodemailer.createTransport({ host: 'localhost', port: smtpPort, secure: true, auth: { user: 'customer', pass: 'test-only-customer-password' }, connectionTimeout: 2000 }).verify(), 'Untrusted TLS must be rejected')
   const originalId = `<${randomUUID()}@postfold.test>`
-  await smtp.sendMail({ from: 'Customer <customer@postfold.test>', to: account.email, subject: 'VPN access request', text: 'Please help with my VPN.', messageId: originalId })
+  await smtp.sendMail({ from: 'Customer <customer@postfold.test>', to: [account.email, 'Manager <manager@postfold.test>'], cc: 'Platform <platform@postfold.test>', envelope: { from: 'customer@postfold.test', to: [account.email] }, subject: 'VPN access request', text: 'Please help with my VPN.', messageId: originalId })
   store = new MailStore(accountId)
   await store.init()
   assert.deepEqual((await store.mailbox()).conversations, [])
@@ -86,6 +86,9 @@ try {
   const received = mailbox.conversations[0]
   assert.equal(received.body.trim(), 'Please help with my VPN.')
   assert.equal(received.unread, true)
+  assert.deepEqual(received.participants.map(person => person.email).sort(), ['customer@postfold.test', 'manager@postfold.test', 'platform@postfold.test'])
+  assert.equal(mailbox.contacts.find(person => person.email === 'platform@postfold.test').name, 'Platform')
+  assert.ok(!received.participants.some(person => person.email === account.email), 'Shared mailbox must not become an external contact')
   const state = () => mailbox.conversationStates.find((item) => item.id === received.id)
   const supportActor = { id: 'test-alice', name: 'Alice Support', email: 'alice@example.test' }
   await store.members(supportActor)
@@ -169,6 +172,7 @@ try {
   const accepted = outcomes[0].status === 'fulfilled' ? reply : null
   if (accepted) assert.deepEqual(await store.reply(accepted), outcomes[0].value)
   await assert.rejects(store.reply({ ...reply, requestId: randomUUID() }))
+  assert.deepEqual((await store.mailbox()).conversations.find(item => item.outgoing).participants.map(person => person.email), ['customer@postfold.test'], 'A direct reply must not claim the original Cc received it')
   mailbox = await store.sync()
   assert.ok(mailbox.conversations.some((item) => item.outgoing && item.body.trim() === reply.text))
   assert.equal(mailbox.deliveries[0].status, 'sent')

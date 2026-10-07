@@ -25,6 +25,7 @@
     "test:sso": "pnpm db:up && pnpm build && node scripts/check-keycloak.mjs",
     "mailbox:configure": "pnpm build:api && node api/dist/api/configure-mailbox.js",
     "test:drag": "node scripts/check-mail-drag.mjs",
+    "test:viewport": "node scripts/check-viewport.mjs",
     "test:container": "node scripts/check-container.mjs"
   },
   "dependencies": {

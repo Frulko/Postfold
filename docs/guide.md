@@ -56,9 +56,9 @@ In manual sort mode, drag a grip above or below a sibling to reorder it. Drop in
 
 Choose **All messages** to list each email separately, with direct reply controls. Choose **Conversations** to group messages by explicit thread ID, show the latest preview and activity, and expand individual messages in the reader. Matching subjects alone never merge unrelated messages.
 
-The preference is saved in this browser, and switching views preserves the current draft. Message actions affect one message in All messages mode; thread actions affect every message in that thread, including messages outside the current folder or search filter. Opening a thread marks its messages read. Drafts remain associated with the message being answered.
+Display mode and list/thread ordering are saved independently in this browser. Both orders default to newest first; choose oldest first to read chronologically. Switching views or order preserves the current draft. Message actions affect one message in All messages mode; thread actions affect every message in that thread, including messages outside the current folder or search filter. Opening a thread marks its messages read. Drafts remain associated with the message being answered.
 
-![A VPN support conversation with three messages and direct reply controls](screenshots/conversation-thread.png)
+![An 18-message support incident with saved ordering and individual participant profiles](screenshots/conversation-thread.png)
 
 ![Individual IT support emails in All messages mode](screenshots/all-messages.png)
 
@@ -70,7 +70,7 @@ Use the sidebar to create or edit a label and click it to filter conversations. 
 
 ### Contacts and notes
 
-Keep contact details, related projects and conversation history together. Notes shown here are stored in the current browser, not shared with teammates yet.
+Keep contact details, related projects and conversation history together. Multi-contact threads show each participant and let you choose their profile; note drafts and saved notes remain attached to that contact. Choosing a profile does not change the reply recipient. New IMAP imports include visible From, To, Cc and Reply-To participants, excluding the shared mailbox and Bcc. Previously cached messages still expose their known contact; full recipient lists become available on newly imported messages. Notes shown here are stored in the current browser, not shared with teammates yet.
 
 ![Contact history, associated project and an internal note saved in the browser](screenshots/contacts-and-notes.png)
 
@@ -106,7 +106,9 @@ Shared Basic access has no individual identity and appears as **Shared access**.
 
 ### Mobile inbox
 
-Folder and label sections start collapsed on mobile. Expand them to use the compact, vertically scrollable tree. The conversation list, reader and contact panel stack vertically. Batch actions remain available without changing the position of the conversation rows.
+The application fits the viewport. On desktop, mail rows, the reader, folders, labels and contact details scroll independently while the global header and list controls remain visible. In short desktop windows, list controls also scroll to keep rows reachable. Folder and label sections start collapsed on mobile. The list, reader and contact panel stack inside a scrollable content area below the fixed global header. Opening a message brings its reader into view; choosing Inbox or a folder returns to the list. Batch actions fit the available space without moving conversation rows.
+
+![Long support thread with a fixed mobile header](screenshots/mobile-thread.png)
 
 <img src="screenshots/mobile-inbox.png" alt="Postfold mobile inbox with project folders, refresh controls and two selected conversations" width="390" />
 
