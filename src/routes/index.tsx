@@ -6,14 +6,16 @@ import { useI18n } from '../lib/i18n'
 import { Suspense, lazy, useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { compareMessages, filterConversations, includesContact, mailboxRows, suggestProjects, threadContacts, threadKey, updateSelection, type MailOrder } from '../lib/mailbox'
-import { getDemoMailbox, listMailbox, searchContacts, saveProjectSettings, updateConversationState, syncMailbox, sendReply } from '../server/demo'
+import { getDemoMailbox, listMailbox, searchContacts, saveProjectSettings, savePreferences, updateConversationState, syncMailbox, sendReply } from '../server/demo'
 import { Icon } from '../components/icon'
 import { ProjectPicker } from '../components/project-picker'
 import { MailboxRefresh } from '../components/mailbox-refresh'
 import { ProjectFolders, type FolderFailure } from '../components/project-folders'
 import { prepareProject, projectColor, projectPath, sortProjects, type ProjectInput, type ProjectSort } from '../../shared/projects'
 import type { Contact, ConversationPatch, ConversationState, DemoMailbox, MailboxQuery, ProjectSettings } from '../../shared/mailbox'
-import { applyConversationStates, conversationStatuses as statuses, mergeConversationStates } from '../../shared/conversation-state'
+import { applyConversationStates, conversationStatuses as statuses, mergeConversationStates, patchState } from '../../shared/conversation-state'
+import { pickPreferences } from '../../shared/preferences'
+import { OFFLINE_HOURS, OUTBOX_LIMIT, forgetOfflineCopy, isNoop, isOutbox, offlineDeadline, rebaseTargets, recordAccepted, rememberDeadline, useOfflineLock, useOnline, type PendingChange } from '../lib/offline'
 import { ConversationActions } from '../components/conversation-actions'
 import { LabelManager, LabelPicker } from '../components/labels'
 import { AssignmentPicker } from '../components/assignment-picker'
@@ -27,7 +29,8 @@ const AuthoringPage = lazy(() => import('../components/authoring-settings').then
 export const Route = createFileRoute('/')({ loader: () => getDemoMailbox(), component: MailboxPage })
 
 type Note = { id: string; contactId: string; body: string; createdAt: string }
-type LocalData = { notes: Note[]; drafts: Record<string, string | RichDraft>; sendRequests?: Record<string, string>; placements?: Record<string, string>; displayMode?: 'messages' | 'threads'; listOrder?: MailOrder; conversationOrder?: MailOrder; contactCollapsed?: boolean }
+type LocalData = { notes: Note[]; drafts: Record<string, string | RichDraft>; sendRequests?: Record<string, string>; placements?: Record<string, string>; displayMode?: 'messages' | 'threads'; listOrder?: MailOrder; conversationOrder?: MailOrder; contactCollapsed?: boolean
+  autoRefresh?: boolean; openFolders?: string[]; preferencesPending?: boolean }
 const ROW_PAGE = 100
 const initials = (name: string) => name.split(' ').map((part) => part[0]).slice(0, 2).join('')
 const demoPresence = [
@@ -48,6 +51,8 @@ function isLocalData(value: unknown): value is LocalData {
     (!('displayMode' in value) || value.displayMode === 'messages' || value.displayMode === 'threads') &&
     (!('listOrder' in value) || value.listOrder === 'newest' || value.listOrder === 'oldest') &&
     (!('contactCollapsed' in value) || typeof value.contactCollapsed === 'boolean') &&
+    (!('autoRefresh' in value) || typeof value.autoRefresh === 'boolean') && (!('preferencesPending' in value) || typeof value.preferencesPending === 'boolean') &&
+    (!('openFolders' in value) || (Array.isArray(value.openFolders) && value.openFolders.every((id) => typeof id === 'string'))) &&
     (!('conversationOrder' in value) || value.conversationOrder === 'newest' || value.conversationOrder === 'oldest') &&
     (!('placements' in value) || (!!value.placements && typeof value.placements === 'object' &&
       !Array.isArray(value.placements) && Object.values(value.placements).every((id) => typeof id === 'string')))
@@ -70,6 +75,7 @@ function MailboxPage() {
   // A window fetched for filters that changed meanwhile is dropped instead of replacing the newer one.
   const isCurrent = (key: string) => !windowed || JSON.stringify(listQueryRef.current) === key
   const acceptMailbox = useCallback((freshMailbox: DemoMailbox, append = false) => {
+    rememberDeadline(offlineDeadline(freshMailbox.viewer?.sessionExpiresAt))
     const states = mergeConversationStates(latestStates.current, freshMailbox.conversationStates)
     latestStates.current = states
     setBaseMailbox((current) => {
@@ -110,6 +116,15 @@ function MailboxPage() {
   const [local, setLocal] = useState<LocalData>({ notes: [], drafts: {} })
   const localRef = useRef(local)
   const [storageReady, setStorageReady] = useState(false)
+  const online = useOnline()
+  // Conversation changes made offline, kept on this device and replayed in order when the network returns.
+  const outboxKey = `${storageKey}:outbox`
+  const [outbox, setOutbox] = useState<PendingChange[]>([])
+  const outboxRef = useRef(outbox)
+  const flushing = useRef(false)
+  // Server-side preferences need an identity; null means a shared basic-auth gate, so choices stay in this browser.
+  const syncedPreferences = initialMailbox.preferences != null
+  const preferencesTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
   const [chosenIds, setChosenIds] = useState<string[]>([])
@@ -142,15 +157,17 @@ function MailboxPage() {
   useEffect(() => {
     try {
       const stored = localStorage.getItem(storageKey)
-      if (stored) {
-        const parsed: unknown = JSON.parse(stored)
-        if (!isLocalData(parsed)) throw new Error(t("Données locales non reconnues."))
-        setLocal(parsed)
-        localRef.current = parsed
-        if (parsed.displayMode === 'threads') {
-          const row = mailboxRows(initialMailbox.conversations, 'threads').find(item => item.messageIds.includes(selectedId))
-          if (row) setSelectedId(row.messageIds.at(-1)!)
-        }
+      const parsed: unknown = stored ? JSON.parse(stored) : { notes: [], drafts: {} }
+      if (!isLocalData(parsed)) throw new Error(t("Données locales non reconnues."))
+      const loaded = initialMailbox.preferences && !parsed.preferencesPending ? { ...parsed, ...initialMailbox.preferences } : parsed
+      setLocal(loaded)
+      localRef.current = loaded
+      if (parsed.preferencesPending) schedulePreferences()
+      const queued: unknown = JSON.parse(localStorage.getItem(outboxKey) ?? '[]')
+      if (isOutbox(queued) && queued.length) { outboxRef.current = queued; setOutbox(queued); for (const change of queued) showChange(change.targets.map((item) => item.id), change.patch) }
+      if (loaded.displayMode === 'threads') {
+        const row = mailboxRows(initialMailbox.conversations, 'threads').find(item => item.messageIds.includes(selectedId))
+        if (row) setSelectedId(row.messageIds.at(-1)!)
       }
       setStorageReady(true)
     } catch {
@@ -160,17 +177,90 @@ function MailboxPage() {
 
   function save(next: LocalData) {
     if (!storageReady) return false
+    const changed = JSON.stringify(pickPreferences(next)) !== JSON.stringify(pickPreferences(localRef.current))
+    if (changed && syncedPreferences) next = { ...next, preferencesPending: true }
     try {
       localStorage.setItem(storageKey, JSON.stringify(next))
       setLocal(next)
       localRef.current = next
       setError('')
+      if (changed) schedulePreferences()
       return true
     } catch {
       setError(t("L’enregistrement local a échoué. Votre saisie reste affichée : copiez-la avant de quitter cette page."))
       return false
     }
   }
+
+  // Sends the reader's display choices shortly after a change; offline they stay pending and leave with the network.
+  function schedulePreferences() {
+    if (!syncedPreferences) return
+    clearTimeout(preferencesTimer.current)
+    preferencesTimer.current = setTimeout(() => {
+      if (!navigator.onLine) return
+      const sent = pickPreferences(localRef.current)
+      savePreferences({ data: sent }).then(() => {
+        const latest = localRef.current
+        if (!latest.preferencesPending || JSON.stringify(pickPreferences(latest)) !== JSON.stringify(sent)) return
+        const done = { ...latest, preferencesPending: false }
+        try { localStorage.setItem(storageKey, JSON.stringify(done)); localRef.current = done; setLocal(done) } catch { /* Stays pending: sent again next time. */ }
+      }).catch(() => { /* Stays pending: retried when the network returns or on the next change. */ })
+    }, 800)
+  }
+
+  function writeOutbox(next: PendingChange[]) {
+    outboxRef.current = next
+    setOutbox(next)
+    try { if (next.length) localStorage.setItem(outboxKey, JSON.stringify(next)); else localStorage.removeItem(outboxKey) } catch { /* Kept in memory until this tab closes. */ }
+  }
+
+  // Shows a queued change right away; the API's states replace it once the change is sent.
+  function showChange(ids: string[], patch: ConversationPatch) {
+    const assignee = patch.assigneeId !== undefined ? (initialMailbox.members ?? []).find((member) => member.id === patch.assigneeId)?.name ?? null : undefined
+    setBaseMailbox((current) => ({ ...current, conversations: current.conversations.map((item) => ids.includes(item.id) ? { ...patchState(item, patch), ...(assignee !== undefined ? { assignee } : {}) } : item) }))
+  }
+
+  // Replays offline changes in order, after any change already running. A change a colleague overtook is refused
+  // by its revisions and the current shared state is shown instead.
+  function flushOutbox() {
+    if (flushing.current || !outboxRef.current.length) return
+    flushing.current = true
+    stateQueue.current = stateQueue.current.then(async () => {
+      const accepted = new Map<string, { from: number; to: number }>()
+      let sent = 0, refused = 0
+      while (outboxRef.current.length && navigator.onLine) {
+        const [change] = outboxRef.current
+        try {
+          const result = await updateConversationState({ data: { targets: rebaseTargets(change, accepted), ...change.patch } })
+          if (result.states) acceptStates(result.states)
+          if (result.ok && result.states) recordAccepted(accepted, change, result.states)
+          if (result.ok) sent++; else refused++
+        } catch { break } // Server unreachable: the rest stays queued for the next reconnection.
+        writeOutbox(outboxRef.current.slice(1))
+      }
+      if (!sent && !refused) return
+      setConversationFailed(refused > 0)
+      setConversationFeedback(refused ? t("{0} modification{1} hors ligne envoyée{1} ; {2} refusée{3} car la conversation ou le dossier a changé entre-temps. L’état partagé actuel est affiché.", sent, sent > 1 ? 's' : '', refused, refused > 1 ? 's' : '')
+        : t("{0} modification{1} faite{1} hors ligne envoyée{1} à l’équipe.", sent, sent > 1 ? 's' : ''))
+      await refreshMailbox(false).catch(() => {})
+    }).finally(() => { flushing.current = false })
+  }
+
+  useEffect(() => {
+    if (!online || !storageReady) return
+    if (localRef.current.preferencesPending) schedulePreferences()
+    flushOutbox()
+  }, [online, storageReady])
+
+  const offlineLocked = useOfflineLock(online)
+  useEffect(() => {
+    if (initialMailbox.viewer?.sessionExpiresAt) rememberDeadline(initialMailbox.viewer.sessionExpiresAt)
+    if (!import.meta.env.PROD || !('serviceWorker' in navigator)) return
+    void navigator.serviceWorker.register('/sw.js').catch(() => {})
+    // Loads the lazy screens once online so the service worker keeps them for offline use.
+    const idle = setTimeout(() => { void import('../components/mail-composer'); void import('../components/authoring-settings') }, 5000)
+    return () => clearTimeout(idle)
+  }, [])
 
   const mailbox = baseMailbox
   const activeLabel = mailbox.labels?.some((item) => item.id === labelId) ? labelId : null
@@ -204,7 +294,7 @@ function MailboxPage() {
   const [listBusy, setListBusy] = useState(false)
   const initialListKey = useRef(listKey)
   useEffect(() => {
-    if (!windowed || listKey === initialListKey.current) return
+    if (!windowed || !online || listKey === initialListKey.current) return
     initialListKey.current = ''
     let active = true
     setListBusy(true)
@@ -217,11 +307,11 @@ function MailboxPage() {
     }).catch(() => { if (active) { setConversationFailed(true); setConversationFeedback(t("Actualisation impossible. Vos données restent affichées.")) } })
       .finally(() => { if (active) setListBusy(false) })
     return () => { active = false }
-  }, [listKey])
+  }, [listKey, online])
   const loadingMore = useRef(false)
   async function loadMore() {
     const cursor = mailbox.page?.nextCursor
-    if (!cursor || loadingMore.current) return
+    if (!cursor || loadingMore.current || !navigator.onLine) return
     loadingMore.current = true
     setListBusy(true)
     try {
@@ -357,6 +447,18 @@ function MailboxPage() {
         const states = selected.map((id) => latestStates.current.find((item) => item.id === id))
         if (!states.length || states.some((item) => !item)) throw new Error(t("Une conversation n’existe plus."))
         const current = states as ConversationState[]
+        if (!navigator.onLine) {
+          if (isNoop(current, outboxRef.current, selected, patch)) return true
+          if (outboxRef.current.length >= OUTBOX_LIMIT) {
+            setConversationFailed(true)
+            setConversationFeedback(t("Trop de modifications hors ligne en attente. Reconnectez-vous pour les envoyer."))
+            return false
+          }
+          writeOutbox([...outboxRef.current, { id: crypto.randomUUID(), targets: current.map(({ id, revision }) => ({ id, revision })), patch }])
+          showChange(selected, patch)
+          if (announce) { setConversationFailed(false); setConversationFeedback(t("Hors ligne : modification gardée sur cet appareil et envoyée au retour du réseau.")) }
+          return true
+        }
         const result = await updateConversationState({ data: { targets: current.map(({ id, revision }) => ({ id, revision })), ...patch } })
         if (result.states) acceptStates(result.states)
         if (!result.ok) {
@@ -402,7 +504,7 @@ function MailboxPage() {
     if (!await changeConversations(ids, { projectId: targetId }, false)) return false
     if (document.activeElement?.getAttribute('role') === 'combobox') selectAllControl.current?.focus()
     clearSelection()
-    setNotice(t("{0} conversation{1} déplacée{1} vers {2}. Classement partagé avec l’équipe.", ids.length, ids.length > 1 ? 's' : '', projectPath(mailbox.projects, targetId)))
+    setNotice(t(navigator.onLine ? "{0} conversation{1} déplacée{1} vers {2}. Classement partagé avec l’équipe." : "{0} conversation{1} déplacée{1} vers {2} sur cet appareil. Le classement sera partagé au retour du réseau.", ids.length, ids.length > 1 ? 's' : '', projectPath(mailbox.projects, targetId)))
     return true
   }
 
@@ -573,6 +675,12 @@ function MailboxPage() {
 
   function sortFolders(sort: ProjectSort) { void commitFolders({ ...folderSettings, sort }) }
 
+  // Past the offline deadline the mailbox is hidden until the user is back online and signed in.
+  if (offlineLocked) return <main className="offline-lock" role="alert"><h1>{t("Reconnexion nécessaire")}</h1>
+    <p>{t("L’accès hors connexion a expiré : il s’arrête à la fin de votre session ({0} h au plus). Reconnectez-vous au réseau puis à Postfold.", OFFLINE_HOURS)}</p>
+    <p>{t("Vos brouillons et vos {0} modification{1} en attente restent sur cet appareil.", outbox.length, outbox.length > 1 ? 's' : '')}</p>
+    <button className="primary-button" disabled={!online} onClick={() => location.reload()}>{t("Se reconnecter")}</button></main>
+
   return (
     <div className="workspace">
       <aside className="sidebar" aria-label={t("Navigation principale")}>
@@ -583,12 +691,12 @@ function MailboxPage() {
           <button className={view === 'contacts' ? 'nav-button active' : 'nav-button'} onClick={() => { if (!preserveDraft()) return; setView('contacts'); setComposerOpen(false); setNotice(''); clearSelection() }}><Icon name="users" />{t("Contacts")}{windowed ? null : <b>{mailbox.contacts.length}</b>}</button>
           <button className={view === 'settings' ? 'nav-button active' : 'nav-button'} onClick={() => { if (!preserveDraft()) return; setView('settings'); setComposerOpen(false); clearSelection() }}><Icon name="settings" />{t('Réglages')}</button>
         </nav>
-        <ProjectFolders mailbox={mailbox} counts={mailbox.counts?.folders} revision={folderSettings.revision} currentId={view === 'mail' ? projectId : null} sort={folderSettings.sort} order={folderSettings.order} disabled={folderBusy} allowDelete={!mailbox.connection} dropTarget={dropTarget} movingMail={!!draggingIds.length}
+        <ProjectFolders mailbox={mailbox} opened={local.openFolders ?? []} onOpenedChange={(openFolders) => save({ ...localRef.current, openFolders })} counts={mailbox.counts?.folders} revision={folderSettings.revision} currentId={view === 'mail' ? projectId : null} sort={folderSettings.sort} order={folderSettings.order} disabled={folderBusy || !online} allowDelete={!mailbox.connection} dropTarget={dropTarget} movingMail={!!draggingIds.length}
           onSelect={selectProject} onSave={saveFolder} onSort={sortFolders} onReorder={reorderFolder} onDelete={async (id, revision) => { const projects = mailbox.projects.filter((item) => item.id !== id); const failure = await commitFolders({ ...folderSettings, revision, projects, order: folderSettings.order.filter((item) => item !== id) }); if (!failure && projectId === id) setProjectId(null); return failure }}
           onMailOver={(event, id) => { if (!dragSession.current.length) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTarget(id) }}
           onMailLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null) }}
           onMailDrop={(event, id) => { if (!dragSession.current.length) return; event.preventDefault(); move(dragSession.current, id); finishDrag() }} />
-        <LabelManager labels={mailbox.labels ?? []} conversations={mailbox.conversations} counts={mailbox.counts?.labels} revision={folderSettings.revision} disabled={folderBusy} selectedId={activeLabel} onSelect={(id) => { setLabelId(id); setView('mail'); clearSelection() }} onSave={async (labels, revision) => { const failure = await commitFolders({ ...folderSettings, labels, revision }); if (!failure) await refreshMailbox(); return failure }} />
+        <LabelManager labels={mailbox.labels ?? []} conversations={mailbox.conversations} counts={mailbox.counts?.labels} revision={folderSettings.revision} disabled={folderBusy || !online} selectedId={activeLabel} onSelect={(id) => { setLabelId(id); setView('mail'); clearSelection() }} onSave={async (labels, revision) => { const failure = await commitFolders({ ...folderSettings, labels, revision }); if (!failure) await refreshMailbox(); return failure }} />
         {folderFeedback ? <p className={`folder-feedback ${folderFailed ? 'failed' : ''}`} role={folderFailed ? 'alert' : 'status'}>{folderFeedback}</p> : null}
         <div className="sidebar-bottom"><span className="user-avatar">{mailbox.viewer ? initials(mailbox.viewer.name) : mailbox.connection ? 'PF' : 'JD'}</span><div>{mailbox.viewer?.name ?? t(mailbox.connection ? "Boîte partagée" : "Julie · Démo")}<small>{mailbox.viewer ? 'Keycloak SSO' : t("Votre espace de travail")}</small></div></div>
       </aside>
@@ -598,8 +706,8 @@ function MailboxPage() {
           <div className="breadcrumb"><span>{t("Support")}</span><Icon name="chevron" /><strong>{view === 'settings' ? t('Gestion de la boîte') : view === 'contacts' ? t("Contacts") : selectedProject?.name ?? t("Tous les échanges")}</strong></div>
           <div className="header-indicators">
             <select className="language-switch" aria-label={t("Langue")} value={locale} onChange={(event) => { setConversationFeedback(''); setFolderFeedback(''); setNotice(''); void navigate({ search: { lang: event.target.value === 'en' ? 'en' : 'fr' }, replace: true }) }}><option value="fr">FR</option><option value="en">EN</option></select>
-            <MailboxRefresh onRefresh={refreshMailbox} connected={!!mailbox.connection} />
-            {mailbox.viewer ? <><span className="identity-badge" title={mailbox.viewer.email}><span className="user-avatar">{initials(mailbox.viewer.name)}</span><span>{mailbox.viewer.name}</span></span><form action="/auth/logout" method="post" onSubmit={(event) => { if (!preserveDraft()) event.preventDefault() }}><button className="secondary-button" type="submit">{t("Se déconnecter")}</button></form></> : null}
+            <MailboxRefresh onRefresh={refreshMailbox} connected={!!mailbox.connection} online={online} automatic={local.autoRefresh ?? true} onAutomaticChange={(autoRefresh) => save({ ...localRef.current, autoRefresh })} />
+            {mailbox.viewer ? <><span className="identity-badge" title={mailbox.viewer.email}><span className="user-avatar">{initials(mailbox.viewer.name)}</span><span>{mailbox.viewer.name}</span></span><form action="/auth/logout" method="post" onSubmit={(event) => { if (!preserveDraft()) event.preventDefault(); else forgetOfflineCopy(true) }}><button className="secondary-button" type="submit">{t("Se déconnecter")}</button></form></> : null}
             {!mailbox.connection && !mailbox.viewer ? <div className="presence-group">
               <ul className="presence-list" aria-label={t("Présences de démonstration")}>
                 {demoPresence.map((person) => <li className="presence-item" key={person.name}>
@@ -615,6 +723,9 @@ function MailboxPage() {
           </div>
         </header>
         <div className="demo-banner"><Icon name="info" /><span>{t(mailbox.connection ? "Boîte IMAP connectée · réponses SMTP protégées contre les doublons. Notes et brouillons restent dans ce navigateur." : "Dossiers, classement, labels et suivi partagés avec l’équipe. Aucune boîte mail connectée ; notes et brouillons restent locaux dans cette démo.")}{mailbox.connection?.error ? ` ${t("La dernière relève a échoué ; les mails en cache sont conservés.")}` : ''}</span></div>
+        {!online || outbox.length ? <p className={`offline-banner ${online ? 'sending' : ''}`} role="status">{online
+          ? t("Envoi de {0} modification{1} faite{1} hors ligne…", outbox.length, outbox.length > 1 ? 's' : '')
+          : t("Hors ligne. Lu, statut, dossier, labels et attribution restent modifiables ({0} en attente, envoyé{1} au retour du réseau). Réponses, gestion des dossiers et relève reprendront en ligne.", outbox.length, outbox.length > 1 ? 's' : '')}</p> : null}
         {mailbox.connection ? <SyncProgressBanner onCycle={() => { void refreshMailbox(false).catch(() => {}) }} /> : null}
         {error ? <div role="alert" className="error-banner">{error}</div> : null}
         {conversationFeedback ? <div role={conversationFailed ? 'alert' : 'status'} className={`conversation-feedback ${conversationFailed ? 'failed' : ''}`}>{conversationFeedback}</div> : null}
@@ -721,7 +832,7 @@ function MailboxPage() {
                 const body = <><MessageBody id={message.id} text={message.body} sender={sender.email} live={!!mailbox.connection} /><button className="message-reply secondary-button" disabled={message.outgoing} onClick={() => beginReply(message.id)}><Icon name="reply" />{t("Répondre à ce mail")}</button></>
                 return displayMode === 'threads' ? <details className="message thread-message" key={message.id} data-message-id={message.id} open={message.id === selectedId || message.id === threadMessages[conversationOrder === 'oldest' ? threadMessages.length - 1 : 0]?.id}><summary>{header}<Icon name="chevron" /></summary>{body}</details> : <article className="message" key={message.id} data-message-id={message.id}><header>{header}</header>{body}</article>
               })}
-              {composerOpen ? <Suspense fallback={<p>{t('Chargement de l’éditeur…')}</p>}><MailComposer key={`${conversation.id}:${storageKey}`} draft={draft} onReady={revealComposer} onChange={setDraft} recipient={replyContact} subject={conversation.subject} storageKey={`${storageKey}:${conversation.id}`} busy={sendBusy} feedback={notice} saved={JSON.stringify(richDraft(local.drafts[conversation.id])) === JSON.stringify(draft)} sendDisabled={!mailbox.connection || !storageReady || stateBusy || !!delivery || !!conversation.outgoing} sendHint={t(!mailbox.connection ? 'Connectez une boîte mail pour envoyer.' : delivery ? delivery.status === 'sent' ? 'Une réponse a déjà été envoyée à ce mail.' : 'Envoi en cours ou incertain : vérifiez Envoyés, ne renvoyez pas.' : 'Le brouillon sera sauvegardé avant l’envoi.')} onSave={() => { if (save({ ...localRef.current, drafts: { ...localRef.current.drafts, [conversation.id]: draft } })) setNotice(t('Brouillon enregistré dans ce navigateur. Aucun email envoyé.')) }} onFilesBusy={setComposerFilesBusy} onSend={mail => void send(mail)} /></Suspense> : <div className="reply-bar"><span>{conversation.outgoing ? t("Message envoyé") : local.drafts[conversation.id] ? t("Brouillon enregistré") : t("Aucune réponse préparée")}</span><button className="primary-button" disabled={conversation.outgoing} onClick={() => beginReply()}><Icon name="reply" />{local.drafts[conversation.id] ? t("Reprendre le brouillon") : t("Préparer une réponse")}</button></div>}
+              {composerOpen ? <Suspense fallback={<p>{t('Chargement de l’éditeur…')}</p>}><MailComposer key={`${conversation.id}:${storageKey}`} draft={draft} onReady={revealComposer} onChange={setDraft} recipient={replyContact} subject={conversation.subject} storageKey={`${storageKey}:${conversation.id}`} busy={sendBusy} feedback={notice} saved={JSON.stringify(richDraft(local.drafts[conversation.id])) === JSON.stringify(draft)} sendDisabled={!online || !mailbox.connection || !storageReady || stateBusy || !!delivery || !!conversation.outgoing} sendHint={t(!online ? 'Hors ligne : l’envoi reprendra une fois reconnecté. Le brouillon reste sur cet appareil.' : !mailbox.connection ? 'Connectez une boîte mail pour envoyer.' : delivery ? delivery.status === 'sent' ? 'Une réponse a déjà été envoyée à ce mail.' : 'Envoi en cours ou incertain : vérifiez Envoyés, ne renvoyez pas.' : 'Le brouillon sera sauvegardé avant l’envoi.')} onSave={() => { if (save({ ...localRef.current, drafts: { ...localRef.current.drafts, [conversation.id]: draft } })) setNotice(t('Brouillon enregistré dans ce navigateur. Aucun email envoyé.')) }} onFilesBusy={setComposerFilesBusy} onSend={mail => void send(mail)} /></Suspense> : <div className="reply-bar"><span>{conversation.outgoing ? t("Message envoyé") : local.drafts[conversation.id] ? t("Brouillon enregistré") : t("Aucune réponse préparée")}</span><button className="primary-button" disabled={conversation.outgoing} onClick={() => beginReply()}><Icon name="reply" />{local.drafts[conversation.id] ? t("Reprendre le brouillon") : t("Préparer une réponse")}</button></div>}
               <ConversationActivity key={conversation.id} ids={readingIds} version={readingIds.map((id) => latestStates.current.find((item) => item.id === id)?.revision).join(",") + JSON.stringify(mailbox.deliveries ?? [])} />
             </> : <div className="empty-folder"><span className="empty-folder-icon" style={{ color: projectColor(selectedProject?.color ?? 'slate') }}><Icon name="folder" /></span><span className="eyebrow">{selectedProject ? projectPath(mailbox.projects, selectedProject.id) : t("Dossier indisponible")}</span><h2>{t("Ce dossier est vide")}</h2><p>{t("Déposez des conversations dans ce dossier ou utilisez « Déplacer vers un projet » depuis la boîte de réception.")}</p></div> : <div className="contact-history"><span className="eyebrow">{t("Historique des échanges")}</span><h2>{t("Les échanges avec")} {contact.name.split(' ')[0]}</h2><p>{t("Tous les projets et conversations associés à ce contact.")}</p>{mailbox.conversations.filter((item) => includesContact(item, contact)).map((item) => <button className="history-item" key={item.id} onClick={() => selectProject(item.projectId, item.id)}><span><strong>{item.subject}</strong><small>{mailbox.projects.find((project) => project.id === item.projectId)?.name}</small></span><span className={`status ${item.status}`}>{t(statuses[item.status])}</span></button>)}</div>}
             {notice ? <p role="status" className="notice">{notice}</p> : null}

@@ -2,6 +2,7 @@ import { isAuthoringChange } from '../../shared/authoring'
 import { createServerFn } from '@tanstack/react-start'
 import { isMailboxQuery, type Activity, type Contact, type ConversationState, type DemoMailbox, type MailLogEntry, type ProjectSettings, type SyncProgress } from '../../shared/mailbox'
 import { isProjectSettings } from '../../shared/projects'
+import { isPreferences, type Preferences } from '../../shared/preferences'
 import { isActivityIds, isConversationUpdate } from '../../shared/conversation-state'
 import { getRequestHeader } from '@tanstack/react-start/server'
 import { isMailAccountUpdate, isReplyRequest, type MailAccountSettings } from '../../shared/mail-account'
@@ -68,12 +69,21 @@ export const saveProjectSettings = createServerFn({ method: 'POST' })
     throw new Error('L’enregistrement partagé est indisponible. Votre saisie est conservée.')
   })
 
+export const savePreferences = createServerFn({ method: 'POST' })
+  .validator((input: unknown) => { if (!isPreferences(input)) throw new Error('Invalid preferences.'); return input })
+  .handler(async ({ data }): Promise<Preferences> => {
+    const response = await fetch(apiPath('/preferences'), { method: 'PUT', headers: apiHeaders(), body: JSON.stringify(data), signal: AbortSignal.timeout(15_000) })
+    if (!response.ok) throw new Error('Preferences could not be saved.')
+    return response.json()
+  })
+
 // A window of the live mailbox for the current filters; the demo mailbox is small and always complete.
 export const listMailbox = createServerFn({ method: 'POST' })
   .validator((input: unknown) => { if (!isMailboxQuery(input)) throw new Error('Invalid mailbox query.'); return input })
   .handler(async ({ data }): Promise<DemoMailbox> => {
     if (process.env.MAILBOX_MODE !== 'imap') return getDemoMailbox()
     const response = await fetch(apiPath('/list'), { method: 'POST', headers: apiHeaders(), body: JSON.stringify(data), signal: AbortSignal.timeout(30_000) })
+    if ([400, 503].includes(response.status)) throw new Error((await response.json()).message ?? 'L’API de la boîte mail est indisponible.')
     if (!response.ok) throw new Error('L’API de la boîte mail est indisponible.')
     return response.json()
   })

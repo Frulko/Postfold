@@ -112,13 +112,16 @@ export function projectTree(projects: Project[], sort: ProjectSort, order: strin
   return result
 }
 
+// One collator for every comparison: localeCompare with options builds a new one per call (~30× slower on large trees).
+const collator = new Intl.Collator('fr', { sensitivity: 'base', numeric: true })
+
 export function sortProjects(projects: Project[], sort: ProjectSort, order: string[] = []) {
   const byId = new Map(projects.map((item) => [item.id, item]))
   const listed = new Set(order)
   const manual = [...listed].map((id) => byId.get(id)).filter((item): item is Project => !!item)
   manual.push(...projects.filter((item) => !listed.has(item.id)))
   if (sort === 'manual') return manual
-  const compare = (a: string, b: string) => a.localeCompare(b, 'fr', { sensitivity: 'base', numeric: true })
+  const compare = collator.compare
   // Subfolders have no project code: they sort by name. Ties (IMAP folders share their first sync date) fall back to the name.
   const code = (item: Project) => item.parentId || item.code === null ? item.name : item.code ?? item.id
   return manual.sort((a, b) => {

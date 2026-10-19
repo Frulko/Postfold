@@ -1,18 +1,16 @@
 import { useI18n } from '../lib/i18n'
-import { useEffect, useId, useLayoutEffect, useRef, useState, type DragEvent } from 'react'
+import { useId, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import type { Mailbox, Project } from '../../shared/mailbox'
 import { projectColor, projectColors, projectSorts, projectPath, projectTree, sortProjects, type ProjectInput, type ProjectSort } from '../../shared/projects'
 
-// Folders start collapsed (live mailboxes hold thousands); the ones a reader opens are remembered in this browser.
-const openKey = 'postfold-open-folders'
-const readOpen = (): string[] => { try { const value = JSON.parse(localStorage.getItem(openKey) ?? '[]'); return Array.isArray(value) ? value : [] } catch { return [] } }
 import { Icon } from './icon'
 
 const colorNames = { green: 'Vert', orange: 'Orange', blue: 'Bleu', purple: 'Violet', rose: 'Rose', slate: 'Gris' }
 export type FolderFailure = { message: string; revision: number }
 
-export function ProjectFolders({ mailbox, counts, revision, currentId, sort, order, disabled, allowDelete = true, dropTarget, movingMail, onSelect, onSave, onSort, onReorder, onDelete, onMailOver, onMailLeave, onMailDrop }: {
-  mailbox: Mailbox; counts?: Record<string, number>; currentId: string | null; sort: ProjectSort; order: string[]; disabled: boolean
+// Folders start collapsed (live mailboxes hold thousands); the reader's opened folders are a synced preference.
+export function ProjectFolders({ mailbox, opened, onOpenedChange, counts, revision, currentId, sort, order, disabled, allowDelete = true, dropTarget, movingMail, onSelect, onSave, onSort, onReorder, onDelete, onMailOver, onMailLeave, onMailDrop }: {
+  mailbox: Mailbox; opened: string[]; onOpenedChange: (opened: string[]) => void; counts?: Record<string, number>; currentId: string | null; sort: ProjectSort; order: string[]; disabled: boolean
   revision: number
   allowDelete?: boolean
   dropTarget: string | null; movingMail: boolean
@@ -35,7 +33,6 @@ export function ProjectFolders({ mailbox, counts, revision, currentId, sort, ord
   const [positionChanged, setPositionChanged] = useState(false)
   const [expectedRevision, setExpectedRevision] = useState(revision)
   const [error, setError] = useState('')
-  const [opened, setOpened] = useState<string[]>([])
   const [dragging, setDragging] = useState<string | null>(null)
   const [target, setTarget] = useState<{ id: string; placement: 'before' | 'inside' | 'after' } | null>(null)
   const dialog = useRef<HTMLDialogElement>(null)
@@ -43,16 +40,20 @@ export function ProjectFolders({ mailbox, counts, revision, currentId, sort, ord
   const nameInput = useRef<HTMLInputElement>(null)
   const dragged = useRef<string | null>(null)
   const keyboardHandle = useRef<HTMLButtonElement | null>(null)
-  const manual = sortProjects(mailbox.projects, 'manual', order)
-  const children = new Map<string | null, Project[]>()
-  for (const item of manual) { const list = children.get(item.parentId ?? null); if (list) list.push(item); else children.set(item.parentId ?? null, [item]) }
-  const parents = new Map(mailbox.projects.map((project) => [project.id, project.parentId ?? null]))
+  // Rebuilt only when the folders or their order change, not on every hover or drag-over render.
+  const { manual, children, parents } = useMemo(() => {
+    const manual = sortProjects(mailbox.projects, 'manual', order)
+    const children = new Map<string | null, Project[]>()
+    for (const item of manual) { const list = children.get(item.parentId ?? null); if (list) list.push(item); else children.set(item.parentId ?? null, [item]) }
+    return { manual, children, parents: new Map(mailbox.projects.map((project) => [project.id, project.parentId ?? null])) }
+  }, [mailbox.projects, order])
   // The selected folder's ancestors stay open so it is always visible.
   const ancestors = new Set<string>()
   for (let id = currentId ? parents.get(currentId) ?? null : null, depth = 0; id && depth < 100; id = parents.get(id) ?? null, depth++) ancestors.add(id)
   const isOpen = (id: string) => opened.includes(id) || ancestors.has(id)
   const collapsed = [...children.keys()].filter((key): key is string => !!key && !isOpen(key))
-  const visible = projectTree(mailbox.projects, sort, order, collapsed, query)
+  const collapsedKey = collapsed.join('\n')
+  const visible = useMemo(() => projectTree(mailbox.projects, sort, order, collapsedKey ? collapsedKey.split('\n') : [], query), [mailbox.projects, sort, order, collapsedKey, query])
   const isInside = (id: string, ancestorId: string) => { for (let item = parents.get(id) ?? null, depth = 0; item && depth < 100; item = parents.get(item) ?? null, depth++) if (item === ancestorId) return true; return false }
   // Folder badges include subfolders. Live mailboxes send per-folder totals; the demo counts its loaded conversations.
   const totals = new Map<string, number>()
@@ -63,11 +64,8 @@ export function ProjectFolders({ mailbox, counts, revision, currentId, sort, ord
   const canReorder = sort === 'manual' && !query.trim() && !disabled
   const sharedProject = editingId ? mailbox.projects.find((item) => item.id === editingId) : undefined
 
-  useEffect(() => setOpened(readOpen()), [])
   function toggle(id: string, open = !isOpen(id)) {
-    const next = open ? [...new Set([...opened, id])] : opened.filter((item) => item !== id)
-    setOpened(next)
-    try { localStorage.setItem(openKey, JSON.stringify(next)) } catch { /* Storage blocked: the tree resets on reload. */ }
+    onOpenedChange(open ? [...new Set([...opened, id])] : opened.filter((item) => item !== id))
   }
 
   useLayoutEffect(() => {
@@ -99,7 +97,7 @@ export function ProjectFolders({ mailbox, counts, revision, currentId, sort, ord
     <div className="folder-content" id={`${id}-folders`}>
     <div className="folder-tools">
       <div className="folder-search"><Icon name="search" /><input aria-label={t("Rechercher un dossier")} placeholder={t("Code ou nom du dossier…")} value={query} onChange={(event) => setQuery(event.target.value)} /></div>
-      <div className="folder-sort"><select aria-label={t("Trier les dossiers")} title={t("Tri partagé avec l’équipe, appliqué à chaque niveau de sous-dossiers")} value={sort} disabled={disabled} onChange={(event) => onSort(event.target.value as ProjectSort)}>{Object.entries(projectSorts).map(([key, label]) => <option key={key} value={key}>{t(label)}</option>)}</select><button className="icon-button folder-collapse-all" aria-label={t("Tout replier")} title={t("Tout replier")} disabled={!opened.length} onClick={() => { setOpened([]); try { localStorage.removeItem(openKey) } catch { /* Storage blocked. */ } }}><Icon name="collapse" /></button></div>
+      <div className="folder-sort"><select aria-label={t("Trier les dossiers")} title={t("Tri partagé avec l’équipe, appliqué à chaque niveau de sous-dossiers")} value={sort} disabled={disabled} onChange={(event) => onSort(event.target.value as ProjectSort)}>{Object.entries(projectSorts).map(([key, label]) => <option key={key} value={key}>{t(label)}</option>)}</select><button className="icon-button folder-collapse-all" aria-label={t("Tout replier")} title={t("Tout replier")} disabled={!opened.length} onClick={() => onOpenedChange([])}><Icon name="collapse" /></button></div>
     </div>
     {sort === 'manual' && query.trim() ? <p className="folder-hint">{t("Effacez la recherche pour réordonner")}</p> : null}
     <nav className="project-nav" aria-label={t("Projets")}>

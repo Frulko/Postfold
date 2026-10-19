@@ -1,4 +1,4 @@
-export type Viewer = { id: string; name: string; email: string; provider: 'keycloak'; admin?: boolean }
+export type Viewer = { id: string; name: string; email: string; provider: 'keycloak'; admin?: boolean; sessionExpiresAt?: number }
 
 export function authMode() {
   const mode = process.env.POSTFOLD_AUTH ?? 'basic'

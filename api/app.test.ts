@@ -19,6 +19,13 @@ test('l’API fonctionne et les données de démo exigent une activation explici
       if (demoMode) {
         const data = await mailbox.json()
         assert.equal(data.projects[0].id, '1842')
+        // Display preferences follow the member: keys merge, unknown choices are refused.
+        const prefer = (input: unknown) => fetch(`${origin}/demo/preferences`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })
+        assert.deepEqual(data.preferences, {})
+        assert.equal((await prefer({ displayMode: 'threads', openFolders: ['1842'] })).status, 200)
+        assert.deepEqual(await (await prefer({ listOrder: 'oldest' })).json(), { displayMode: 'threads', openFolders: ['1842'], listOrder: 'oldest' })
+        assert.equal((await prefer({ displayMode: 'grid' })).status, 400)
+        assert.deepEqual((await (await fetch(`${origin}/demo/mailbox`)).json()).preferences, { displayMode: 'threads', openFolders: ['1842'], listOrder: 'oldest' })
         assert.ok(data.contacts.every((contact: { email: string }) => contact.email.endsWith('@example.test')))
         const patch = (input: unknown) => fetch(`${origin}/demo/conversations/state`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })
         const initialStates = data.conversationStates

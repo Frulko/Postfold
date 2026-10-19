@@ -3,7 +3,8 @@ import { Pool } from 'pg'
 import { randomUUID } from 'node:crypto'
 import { isProjectSettings } from '../shared/projects.js'
 import type { Activity, ConversationState, ConversationUpdate, Member, ProjectSettings, Mailbox } from '../shared/mailbox.js'
-import { isActivityIds, isConversationUpdate } from '../shared/conversation-state.js'
+import { isActivityIds, isConversationUpdate, patchState } from '../shared/conversation-state.js'
+import { isPreferences, type Preferences } from '../shared/preferences.js'
 import { demoMailbox, demoMembers } from './demo-mailbox.js'
 import { authMode, type Viewer } from '../shared/auth.js'
 import { isAuthoringChange, type AuthoringSettings, type EmailTemplate } from '../shared/authoring.js'
@@ -28,6 +29,7 @@ export class ProjectStore implements OnApplicationShutdown {
     )`)
     await this.pool.query('ALTER TABLE postfold_mailbox_members ADD COLUMN IF NOT EXISTS is_demo boolean NOT NULL DEFAULT false')
     await this.pool.query("ALTER TABLE postfold_mailbox_members ADD COLUMN IF NOT EXISTS role text NOT NULL DEFAULT 'member', ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true, ADD COLUMN IF NOT EXISTS last_seen timestamptz NOT NULL DEFAULT now()")
+    await this.pool.query("ALTER TABLE postfold_mailbox_members ADD COLUMN IF NOT EXISTS preferences jsonb NOT NULL DEFAULT '{}'::jsonb")
     await this.pool.query(`CREATE TABLE IF NOT EXISTS postfold_authoring (mailbox_id text PRIMARY KEY REFERENCES demo_project_settings(mailbox_id) ON DELETE CASCADE, revision integer NOT NULL DEFAULT 0, settings jsonb NOT NULL)`)
     const demoAuthoring = this.seedMailbox === demoMailbox ? { templates: [{ id: 'demo-ack', name: 'Ticket received', scope: 'team', ownerId: 'demo-julie', html: '<p>Hello {{contact.name}},</p><p>We have received your request about <strong>{{subject}}</strong>. Our IT team is investigating and will keep you updated.</p>', text: 'Hello {{contact.name}},\nWe have received your request about {{subject}}. Our IT team is investigating and will keep you updated.' }], signatures: [{ id: 'demo-support', name: 'IT Support', html: '<table cellpadding="0" cellspacing="0"><tbody><tr><td style="border-left:3px solid #2563eb;padding:8px 12px;font-family:Arial;font-size:13px"><strong>IT Support Team</strong><br><span style="color:#64748b">Postfold · Service desk</span><br><a href="mailto:support@example.test">support@example.test</a></td></tr></tbody></table>', text: 'IT Support Team\nPostfold · Service desk\nsupport@example.test' }], assignments: Object.fromEntries(demoMembers.map(m => [m.id, 'demo-support'])) } : { templates: [], signatures: [], assignments: {} }
     await this.pool.query('INSERT INTO postfold_authoring (mailbox_id,settings) VALUES ($1,$2) ON CONFLICT DO NOTHING', [this.mailboxId, demoAuthoring])
@@ -103,6 +105,22 @@ export class ProjectStore implements OnApplicationShutdown {
     if (viewer) await this.pool.query(`INSERT INTO postfold_mailbox_members (mailbox_id,id,name,email,is_demo) VALUES ($1,$2,$3,$4,$5)
       ON CONFLICT (mailbox_id,id) DO UPDATE SET name=EXCLUDED.name,email=EXCLUDED.email,is_demo=EXCLUDED.is_demo,last_seen=now()`, [this.mailboxId, viewer.id, viewer.name, viewer.email, viewer.provider === 'demo'])
     return (await this.pool.query<Member>('SELECT id,name,email,role,active,last_seen AS "lastSeen" FROM postfold_mailbox_members WHERE mailbox_id=$1 AND ($2::boolean OR NOT is_demo) ORDER BY lower(name),id', [this.mailboxId, authMode() === 'basic'])).rows
+  }
+
+  async preferences(viewer?: Member): Promise<Preferences | null> {
+    if (!viewer) return null
+    const { rows } = await this.pool.query<{ preferences: Preferences }>('SELECT preferences FROM postfold_mailbox_members WHERE mailbox_id=$1 AND id=$2', [this.mailboxId, viewer.id])
+    return rows[0]?.preferences ?? {}
+  }
+
+  // Keys are merged, so two browsers changing different choices do not overwrite each other.
+  async updatePreferences(input: unknown, viewer?: Member): Promise<Preferences> {
+    if (!viewer) throw new ForbiddenException('Preferences need a signed-in user.')
+    if (!isPreferences(input)) throw new BadRequestException('Invalid preferences.')
+    const { rows } = await this.pool.query<{ preferences: Preferences }>(`INSERT INTO postfold_mailbox_members (mailbox_id,id,name,email,preferences) VALUES ($1,$2,$3,$4,$5)
+      ON CONFLICT (mailbox_id,id) DO UPDATE SET preferences = postfold_mailbox_members.preferences || EXCLUDED.preferences RETURNING preferences`,
+      [this.mailboxId, viewer.id, viewer.name, viewer.email, input])
+    return rows[0].preferences
   }
 
   async checkMemberAccess(viewer: Viewer) {
@@ -196,9 +214,7 @@ export class ProjectStore implements OnApplicationShutdown {
       const { rows } = await client.query<ConversationState>(`SELECT ${stateColumns} FROM demo_conversation_state
         WHERE mailbox_id = $1 AND id = ANY($2::text[]) ORDER BY id FOR UPDATE`, [this.mailboxId, ids])
       if (rows.length !== ids.length) throw new BadRequestException('Une conversation n’existe plus dans cette boîte.')
-      const next = rows.map((row) => ({ ...row, unread: input.unread ?? row.unread, status: input.status ?? row.status, projectId: input.projectId ?? row.projectId,
-        assigneeId: input.assigneeId !== undefined ? input.assigneeId : row.assigneeId,
-        labelIds: [...new Set([...(row.labelIds ?? []), ...(input.addLabelIds ?? [])])].filter((id) => !input.removeLabelIds?.includes(id)).sort() }))
+      const next = rows.map((row) => patchState(row, input))
       const changed = next.filter((row, index) => row.assigneeId !== rows[index].assigneeId || row.unread !== rows[index].unread || row.status !== rows[index].status || row.projectId !== rows[index].projectId || JSON.stringify(row.labelIds) !== JSON.stringify([...(rows[index].labelIds ?? [])].sort()))
       if (changed.some((row) => row.revision !== input.targets.find((target) => target.id === row.id)!.revision)) {
         throw new ConflictException({ message: 'Un collègue a modifié une conversation. Aucun changement du lot n’a été appliqué ; vérifiez les états puis réessayez.', states: rows })

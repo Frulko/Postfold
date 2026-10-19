@@ -1,4 +1,4 @@
-import type { Conversation, ConversationState, ConversationUpdate } from './mailbox.js'
+import type { Conversation, ConversationPatch, ConversationState, ConversationUpdate } from './mailbox.js'
 
 export const conversationStatuses = { open: 'À traiter', waiting: 'En attente', closed: 'Terminé' }
 
@@ -16,6 +16,13 @@ export function isConversationUpdate(value: unknown): value is ConversationUpdat
     (input.addLabelIds === undefined || ids(input.addLabelIds)) && (input.removeLabelIds === undefined || ids(input.removeLabelIds)) &&
     (input.unread === undefined || typeof input.unread === 'boolean') &&
     (input.status === undefined || (typeof input.status === 'string' && Object.hasOwn(conversationStatuses, input.status)))
+}
+
+// The state a patch produces; the API applies it on save and the browser to show offline changes right away.
+export function patchState<T extends Omit<ConversationState, 'revision'>>(state: T, patch: ConversationPatch): T {
+  return { ...state, unread: patch.unread ?? state.unread, status: patch.status ?? state.status, projectId: patch.projectId ?? state.projectId,
+    assigneeId: patch.assigneeId !== undefined ? patch.assigneeId : state.assigneeId,
+    labelIds: [...new Set([...(state.labelIds ?? []), ...(patch.addLabelIds ?? [])])].filter((id) => !patch.removeLabelIds?.includes(id)).sort() }
 }
 
 export function mergeConversationStates(current: ConversationState[], incoming: ConversationState[]) {

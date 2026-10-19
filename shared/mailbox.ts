@@ -57,7 +57,7 @@ export function isMailboxQuery(value: unknown): value is MailboxQuery {
 export type MailboxPage = { total: number; nextCursor: string | null }
 export type MailboxCounts = { messages: number; threads: number; labels: Record<string, number>; folders: Record<string, number> }
 
-export type DemoMailbox = Mailbox & { page?: MailboxPage; counts?: MailboxCounts; viewer?: import('./auth.js').Viewer; members?: Member[]; currentMemberId?: string; projectSettings: Omit<ProjectSettings, 'projects'>; conversationStates: ConversationState[]; connection?: { mode: 'imap'; email: string; lastSync: string | null; error: boolean; maxMessagesPerSync: number }; deliveries?: { targetId: string; status: 'sending' | 'sent' | 'uncertain'; sentCopy: boolean }[] }
+export type DemoMailbox = Mailbox & { preferences?: import('./preferences.js').Preferences | null; page?: MailboxPage; counts?: MailboxCounts; viewer?: import('./auth.js').Viewer; members?: Member[]; currentMemberId?: string; projectSettings: Omit<ProjectSettings, 'projects'>; conversationStates: ConversationState[]; connection?: { mode: 'imap'; email: string; lastSync: string | null; error: boolean; maxMessagesPerSync: number }; deliveries?: { targetId: string; status: 'sending' | 'sent' | 'uncertain'; sentCopy: boolean }[] }
 
 // Live view of the background synchronization; `stored` counts messages whose complete copy is in PostgreSQL.
 export type SyncProgress = {

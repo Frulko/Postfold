@@ -117,7 +117,7 @@ export class KeycloakSessions {
     try {
       await client.query('BEGIN')
       // Serialize refresh-token rotation for this session across concurrent API requests and instances.
-      const { rows } = await client.query('SELECT secret FROM postfold_sessions WHERE id=$1 AND expires_at>now() FOR UPDATE', [id])
+      const { rows } = await client.query('SELECT secret, expires_at FROM postfold_sessions WHERE id=$1 AND expires_at>now() FOR UPDATE', [id])
       if (!rows.length) { await client.query('COMMIT'); return null }
       let session = this.open<Session>(rows[0].secret, id)
       if (session.accessExpiresAt <= Date.now() + 30_000) {
@@ -130,7 +130,8 @@ export class KeycloakSessions {
       }
       const { viewer } = await this.verifyAccess(session.access)
       await client.query('COMMIT')
-      return viewer
+      // The browser stops offline access at this absolute end of the session.
+      return { ...viewer, sessionExpiresAt: new Date(rows[0].expires_at).getTime() }
     } catch (error) {
       await client.query('ROLLBACK')
       if (error instanceof UnauthorizedException || error instanceof ForbiddenException || error instanceof errors.JOSEError || (error instanceof oidc.ResponseBodyError && error.error === 'invalid_grant')) {
