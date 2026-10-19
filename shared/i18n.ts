@@ -356,7 +356,6 @@ const english: Record<string, string> = {
   "Fiche contact": "Contact profile",
   "Fiche du contact": "Contact profile",
   "Gestion des labels": "Label management",
-  "Glisser la poignée pour réordonner": "Drag handle to reorder",
   "Glisser, ou utiliser les flèches ↑ ↓ au clavier": "Drag or use ↑ ↓ on the keyboard",
   "Historique des échanges": "Conversation history",
   "Historique du contact": "Contact history",
@@ -429,7 +428,6 @@ const english: Record<string, string> = {
   "Reprendre le brouillon": "Resume draft",
   "Rédige une réponse": "Writing a reply",
   "Disponible": "Available",
-  "Réglages communs à toute l’équipe": "Settings shared with the team",
   "Réordonner {0}": "Reorder {0}",
   "Sous-dossier": "Subfolder",
   "Support": "Support",
@@ -444,7 +442,6 @@ const english: Record<string, string> = {
   "Tous les labels": "All labels",
   "Tous les projets et conversations associés à ce contact.": "All projects and conversations linked to this contact.",
   "Tous les échanges": "All conversations",
-  "Tri partagé avec l’équipe": "Sorting shared with the team",
   "Trier les dossiers": "Sort folders",
   "Téléphone": "Phone",
   "Un détail utile pour la prochaine fois…": "A useful detail for next time…",
@@ -519,7 +516,13 @@ const english: Record<string, string> = {
   "environ {0} restantes": "about {0} left",
   "Rechercher un contact": "Search contacts",
   "Nom ou adresse…": "Name or address…",
-  "Chargement…": "Loading…"
+  "Chargement…": "Loading…",
+  "Tout replier": "Collapse all",
+  "Tri partagé avec l’équipe, appliqué à chaque niveau de sous-dossiers": "Sort shared with the team, applied at every subfolder level",
+  "Traité par": "Handled by",
+  "Traités par tout le monde": "Handled by anyone",
+  "{0} (moi)": "{0} (me)",
+  "Mails attribués à cette personne, ou auxquels elle a répondu, ou dont elle a changé le statut, le dossier ou les labels": "Mail assigned to this person, or that they answered or whose status, folder or labels they changed"
 }
 
 export const parseLocale = (value: unknown): Locale => value === 'en' ? 'en' : 'fr'

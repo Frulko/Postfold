@@ -17,13 +17,14 @@ export const projectColor = (value: string) => projectColors[value as keyof type
 export function isProjectSettings(value: unknown): value is ProjectSettings {
   if (!value || typeof value !== 'object') return false
   const item = value as ProjectSettings
+  const ids = new Set(Array.isArray(item.projects) ? item.projects.map((project) => project?.id) : [])
   return Number.isSafeInteger(item.revision) && item.revision >= 0 &&
     typeof item.sort === 'string' && isProjectSort(item.sort) && Array.isArray(item.projects) &&
-    item.projects.length > 0 && item.projects.length <= 1000 && item.projects.every(isProject) &&
+    item.projects.length > 0 && item.projects.length <= 10_000 && item.projects.every(isProject) &&
     new Set(item.projects.map((project) => project.id.toLowerCase())).size === item.projects.length &&
     isProjectHierarchy(item.projects) && isLabels(item.labels ?? []) &&
     Array.isArray(item.order) && item.order.length === item.projects.length &&
-    new Set(item.order).size === item.order.length && item.order.every((id) => typeof id === 'string' && item.projects.some((project) => project.id === id))
+    new Set(item.order).size === item.order.length && item.order.every((id) => typeof id === 'string' && ids.has(id))
 }
 
 export function isProject(value: unknown): value is Project {
@@ -82,32 +83,49 @@ export function projectPath(projects: Project[], id: string): string {
   return project.parentId ? `${projectPath(projects, project.parentId)} / ${project.name}` : project.code === null ? project.name : `${project.code ?? project.id} — ${project.name}`
 }
 
+// Folders sorted level by level: each parent lists its children in the chosen order.
 export function projectTree(projects: Project[], sort: ProjectSort, order: string[], collapsed: string[] = [], query = '') {
-  const ordered = sortProjects(projects, sort, order)
-  const needle = query.trim().normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase('fr')
-  // ponytail: scan paths for demo-sized catalogs; index ancestry if folder searches become slow.
-  const result: { project: Project; depth: number }[] = []
-  function visit(parentId: string | null, depth: number) {
-    for (const project of ordered.filter((item) => (item.parentId ?? null) === parentId)) {
-      const matches = !needle || projectPath(projects, project.id).normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase('fr').includes(needle)
-      if (matches || (needle && ordered.some((item) => projectPath(projects, item.id).startsWith(`${projectPath(projects, project.id)} /`) && projectPath(projects, item.id).normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase('fr').includes(needle)))) result.push({ project, depth })
-      if (needle || !collapsed.includes(project.id)) visit(project.id, depth + 1)
-    }
+  const fold = (value: string) => value.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase('fr')
+  const needle = fold(query.trim())
+  const closed = new Set(collapsed)
+  const children = new Map<string | null, Project[]>()
+  for (const project of sortProjects(projects, sort, order)) {
+    const siblings = children.get(project.parentId ?? null)
+    if (siblings) siblings.push(project)
+    else children.set(project.parentId ?? null, [project])
   }
-  visit(null, 0)
+  const result: { project: Project; depth: number }[] = []
+  // Same path as projectPath, built once per folder; a search keeps the ancestors of every match.
+  function visit(parentId: string | null, depth: number, parentPath: string): boolean {
+    let found = false
+    for (const project of children.get(parentId) ?? []) {
+      const path = parentId ? `${parentPath} / ${project.name}` : project.code === null ? project.name : `${project.code ?? project.id} — ${project.name}`
+      const start = result.length
+      result.push({ project, depth })
+      const below = needle || !closed.has(project.id) ? visit(project.id, depth + 1, path) : false
+      if (needle && !below && !fold(path).includes(needle)) result.length = start
+      else found = true
+    }
+    return found
+  }
+  visit(null, 0, '')
   return result
 }
 
 export function sortProjects(projects: Project[], sort: ProjectSort, order: string[] = []) {
-  const manual = [...new Set(order)].map((id) => projects.find((item) => item.id === id)).filter((item): item is Project => !!item)
-  manual.push(...projects.filter((item) => !order.includes(item.id)))
+  const byId = new Map(projects.map((item) => [item.id, item]))
+  const listed = new Set(order)
+  const manual = [...listed].map((id) => byId.get(id)).filter((item): item is Project => !!item)
+  manual.push(...projects.filter((item) => !listed.has(item.id)))
   if (sort === 'manual') return manual
   const compare = (a: string, b: string) => a.localeCompare(b, 'fr', { sensitivity: 'base', numeric: true })
+  // Subfolders have no project code: they sort by name. Ties (IMAP folders share their first sync date) fall back to the name.
+  const code = (item: Project) => item.parentId || item.code === null ? item.name : item.code ?? item.id
   return manual.sort((a, b) => {
-    if (sort === 'code') return compare(a.code === null ? a.name : a.code ?? a.id, b.code === null ? b.name : b.code ?? b.id)
-    if (sort === 'name-asc' || sort === 'name-desc') return compare(a.name, b.name) * (sort === 'name-desc' ? -1 : 1) || compare(a.id, b.id)
+    if (sort === 'code') return compare(code(a), code(b)) || compare(a.name, b.name) || compare(a.id, b.id)
+    if (sort === 'name-asc' || sort === 'name-desc') return (compare(a.name, b.name) || compare(a.id, b.id)) * (sort === 'name-desc' ? -1 : 1)
     const dates = (a.createdAt ? Date.parse(a.createdAt) : 0) - (b.createdAt ? Date.parse(b.createdAt) : 0)
-    return dates * (sort === 'recent' ? -1 : 1) || compare(a.id, b.id)
+    return dates * (sort === 'recent' ? -1 : 1) || compare(a.name, b.name) || compare(a.id, b.id)
   })
 }
 

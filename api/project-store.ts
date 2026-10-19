@@ -38,6 +38,7 @@ export class ProjectStore implements OnApplicationShutdown {
       actor jsonb, kind text NOT NULL CHECK (kind IN ('updated','reply')), data jsonb NOT NULL, PRIMARY KEY (mailbox_id,id)
     )`)
     await this.pool.query('CREATE INDEX IF NOT EXISTS postfold_activity_conversation ON postfold_activity (mailbox_id,conversation_id,created_at DESC,id DESC)')
+    await this.pool.query("CREATE INDEX IF NOT EXISTS postfold_activity_actor ON postfold_activity (mailbox_id,(actor->>'id'))")
     await this.pool.query(`CREATE TABLE IF NOT EXISTS demo_conversation_state (
       mailbox_id text NOT NULL REFERENCES demo_project_settings(mailbox_id) ON DELETE CASCADE,
       id text NOT NULL, revision integer NOT NULL DEFAULT 0 CHECK (revision >= 0),

@@ -27,6 +27,7 @@ const paths = {
   reply: 'M9 6 4 11l5 5M4 11h9a7 7 0 0 1 7 7v2',
   arrow: 'M7 17 17 7M7 7h10v10',
   chevron: 'm9 5 7 7-7 7',
+  collapse: 'm7 20 5-5 5 5M7 4l5 5 5-5',
   info: 'M12 11v6M12 7h.01M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0Z',
   plus: 'M12 5v14M5 12h14',
   close: 'm6 6 12 12M6 18 18 6',

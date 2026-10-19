@@ -28,6 +28,8 @@ const folderStatus = { messages: true, uidNext: true, uidValidity: true, unseen:
 const cycleStarts = { scheduled: 'Synchronization started', manual: 'Synchronization started on request', resume: 'Synchronization resumed to continue the import',
   startup: 'Synchronization started after startup', settings: 'Synchronization started after a settings change' }
 const LIST_PAGE = 200 // Messages per list window.
+// A reply or a change of status, folder, labels or assignee counts as handling; opening a mail only marks it read.
+const handledActivity = `kind = 'reply' OR ${['status', 'projectId', 'labelIds', 'assigneeId'].map((key) => `data->'before'->'${key}' IS DISTINCT FROM data->'after'->'${key}'`).join(' OR ')}`
 // Diacritic-insensitive search like the browser filter; PostgreSQL extensions such as unaccent are not required.
 const searchable = (value: string) => value.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase('fr')
 const searchText = `lower(translate(concat_ws(' ', m.data->>'subject', m.data->>'preview', m.data->'sender'->>'name', m.data->'sender'->>'email', m.data->>'replyTo', m.data->>'participants'), 'ÀÂÄÁÃÅÉÈÊËÍÌÎÏÓÒÔÖÕÚÙÛÜÇÑÝàâäáãåéèêëíìîïóòôöõúùûüçñýÿ', 'AAAAAAEEEEIIIIOOOOOUUUUCNYaaaaaaeeeeiiiiooooouuuucnyy'))`
@@ -397,13 +399,14 @@ export class MailStore extends ProjectStore {
       AND ($2::text[] IS NULL OR COALESCE(s.project_id, m.data->>'projectId') = ANY($2::text[]))
       AND ($3 = 'all' OR ($3 = 'unread' AND COALESCE(s.unread, (m.data->>'unread')::boolean)) OR COALESCE(s.status, m.data->>'status') = $3)
       AND ($4::text IS NULL OR $4 = ANY(COALESCE(s.label_ids, ARRAY[]::text[])))
-      AND ($5 = '' OR strpos(${searchText}, $5) > 0 OR COALESCE(s.project_id, m.data->>'projectId') = ANY($6::text[]))`
-    const values = [this.mailboxId, folderIds, query.status ?? 'all', query.labelId ?? null, needle, pathIds]
+      AND ($5 = '' OR strpos(${searchText}, $5) > 0 OR COALESCE(s.project_id, m.data->>'projectId') = ANY($6::text[]))
+      AND ($7::text IS NULL OR s.assignee_id = $7 OR m.id IN (SELECT conversation_id FROM postfold_activity WHERE mailbox_id = $1 AND actor->>'id' = $7 AND (${handledActivity})))`
+    const values = [this.mailboxId, folderIds, query.status ?? 'all', query.labelId ?? null, needle, pathIds, query.memberId ?? null]
     const from = 'FROM mail_messages m LEFT JOIN demo_conversation_state s ON s.mailbox_id = m.mailbox_id AND s.id = m.id'
     const [{ rows }, { rows: [total] }] = await Promise.all([
       this.pool.query<{ data: CachedMessage['data'] }>(`SELECT m.data - 'references' AS data ${from} WHERE ${filters}
-        AND ($7::text IS NULL OR (m.data->>'sentAt', m.id) ${oldest ? '>' : '<'} ($7, $8))
-        ORDER BY m.data->>'sentAt' ${oldest ? 'ASC' : 'DESC'}, m.id ${oldest ? 'ASC' : 'DESC'} LIMIT $9`, [...values, cursorAt, cursorId, limit + 1]),
+        AND ($8::text IS NULL OR (m.data->>'sentAt', m.id) ${oldest ? '>' : '<'} ($8, $9))
+        ORDER BY m.data->>'sentAt' ${oldest ? 'ASC' : 'DESC'}, m.id ${oldest ? 'ASC' : 'DESC'} LIMIT $10`, [...values, cursorAt, cursorId, limit + 1]),
       this.pool.query<{ messages: number; threads: number }>(`SELECT count(*)::integer AS messages, count(DISTINCT COALESCE(m.data->>'threadId', m.id))::integer AS threads ${from} WHERE ${filters}`, values),
     ])
     const messages = rows.slice(0, limit).map((row) => row.data)

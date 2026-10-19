@@ -129,6 +129,16 @@ test('nested folders reject cycles and duplicate siblings and expose descendant 
   assert.deepEqual(projectTree(projects, 'manual', ['archive', 'plans', '1']).map(({ project, depth }) => [project.id, depth]), [['1', 0], ['plans', 1], ['archive', 2]])
   assert.deepEqual(projectTree(projects, 'manual', [], ['1']).map(({ project }) => project.id), ['1'])
   assert.deepEqual(projectTree(projects, 'manual', [], ['1'], 'archive').map(({ project }) => project.id), ['1', 'plans', 'archive'])
+  // Sorting applies inside every subfolder, ties on IMAP sync dates fall back to the name, and large catalogs stay valid.
+  const nested = [{ id: '1', name: 'Projets', color: 'blue' }, { id: 'f_b', name: '30014 - B', color: 'blue', parentId: '1', createdAt: '2026-01-01T00:00:00Z' },
+    { id: 'f_c', name: '30006 - C', color: 'blue', parentId: '1', createdAt: '2026-01-01T00:00:00Z' }, { id: 'f_a', name: '30015 - A', color: 'blue', parentId: '1', createdAt: '2026-01-01T00:00:00Z' }]
+  const tree = (sort: Parameters<typeof sortProjects>[1]) => projectTree(nested, sort, nested.map((item) => item.id)).map(({ project }) => project.id)
+  assert.deepEqual(tree('name-asc'), ['1', 'f_c', 'f_b', 'f_a'])
+  assert.deepEqual(tree('name-desc'), ['1', 'f_a', 'f_b', 'f_c'])
+  assert.deepEqual(tree('code'), ['1', 'f_c', 'f_b', 'f_a'])
+  assert.deepEqual(tree('recent'), ['1', 'f_c', 'f_b', 'f_a'])
+  const many = Array.from({ length: 1200 }, (_, index) => ({ id: `f${index}`, name: `Folder ${index}`, color: 'blue', parentId: index ? 'f0' : null }))
+  assert.ok(isProjectSettings({ revision: 0, sort: 'name-asc', projects: many, order: many.map((item) => item.id) }))
   assert.ok(isLabels([{ id: 'l1', name: 'Urgent', color: 'rose' }]))
   assert.equal(isLabels([{ id: 'l1', name: 'Urgent', color: 'rose' }, { id: 'l2', name: 'urgent', color: 'blue' }]), false)
   assert.equal(isConversationUpdate({ targets: [{ id: 'a', revision: 0 }], addLabelIds: ['l1', 'l1'] }), false)

@@ -193,6 +193,14 @@ try {
   const sentActivity = (await store.activity([received.id])).filter((entry) => entry.kind === 'reply')
   assert.equal(sentActivity.length, 1, 'Retries and duplicate replies must not create additional send activity')
   assert.equal(sentActivity[0].actor.id, supportActor.id)
+  const handled = await store.mailbox({ memberId: supportActor.id })
+  assert.ok(handled.conversations.some((item) => item.id === received.id) && handled.page.total > 0, 'The colleague filter lists what this person was assigned or answered')
+  assert.equal((await store.mailbox({ memberId: 'nobody' })).page.total, 0)
+  const reader = { id: 'test-reader', name: 'Reader', email: 'reader@example.test' }
+  await store.members(reader)
+  const opened = (await store.readConversationStates([received.id]))[0]
+  await store.updateConversations({ targets: [{ id: received.id, revision: opened.revision }], unread: !opened.unread }, reader)
+  assert.equal((await store.mailbox({ memberId: reader.id })).page.total, 0, 'Opening a mail does not count as handling it')
   assert.equal(sentActivity[0].data.status, 'sent')
   assert.equal((await pool.query('SELECT source FROM mail_sends WHERE mailbox_id=$1 AND status=$2',[`imap:${accountId}`,'sent'])).rows[0].source,null, 'Confirmed MIME must be archived before clearing its send spool')
   const outgoingArchive = (await store.archives({query:'Re: VPN access request',missingOnly:false})).items.find(item=>item.messageId.startsWith('sent_'))

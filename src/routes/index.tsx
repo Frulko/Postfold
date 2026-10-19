@@ -95,6 +95,7 @@ function MailboxPage() {
   const [projectId, setProjectId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [labelId, setLabelId] = useState<string | null>(null)
+  const [memberId, setMemberId] = useState<string | null>(null)
   const [view, setView] = useState<'mail' | 'contacts' | 'settings'>('mail')
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('templates')
   const [status, setStatus] = useState('all')
@@ -173,8 +174,10 @@ function MailboxPage() {
 
   const mailbox = baseMailbox
   const activeLabel = mailbox.labels?.some((item) => item.id === labelId) ? labelId : null
+  // Live windows are filtered by colleague in PostgreSQL (assignment and activity); the demo filters its assignments.
   const filtered = (source: DemoMailbox) => filterConversations(source, projectId, query)
-    .filter((item) => (status === 'all' || (status === 'unread' ? item.unread : item.status === status)) && (!activeLabel || item.labelIds?.includes(activeLabel)))
+    .filter((item) => (status === 'all' || (status === 'unread' ? item.unread : item.status === status)) && (!activeLabel || item.labelIds?.includes(activeLabel)) &&
+      (!memberId || windowed || item.assigneeId === memberId))
   const conversations = filtered(mailbox)
   const displayMode = local.displayMode ?? 'messages'
   const listOrder = local.listOrder ?? 'newest'
@@ -193,7 +196,7 @@ function MailboxPage() {
   useEffect(() => { const timer = setTimeout(() => setDebouncedQuery(query.trim()), 300); return () => clearTimeout(timer) }, [query])
   // The contacts view loads the history of the selected contact; the mail view loads its filters.
   const listQuery: MailboxQuery = view === 'contacts' ? { query: contact.email, order: 'newest' }
-    : { projectId, status: status as MailboxQuery['status'], labelId: activeLabel, query: debouncedQuery, threads: displayMode === 'threads', order: listOrder }
+    : { projectId, status: status as MailboxQuery['status'], labelId: activeLabel, memberId, query: debouncedQuery, threads: displayMode === 'threads', order: listOrder }
   const listKey = JSON.stringify(listQuery)
   listQueryRef.current = listQuery
   selectedRef.current = selectedId
@@ -259,7 +262,7 @@ function MailboxPage() {
   const chosen = chosenIds.filter((id) => visibleSet.has(id))
   // ponytail: rows render in pages while scrolling (the selected row is always included); switch to windowing if the DOM itself grows too large.
   const [rowLimit, setRowLimit] = useState(ROW_PAGE)
-  useEffect(() => setRowLimit(ROW_PAGE), [view, projectId, query, status, labelId, displayMode, listOrder])
+  useEffect(() => setRowLimit(ROW_PAGE), [view, projectId, query, status, labelId, memberId, displayMode, listOrder])
   const selectedRow = rows.findIndex((item) => item.messageIds.includes(selectedId))
   const shownRows = rows.slice(0, Math.max(rowLimit, selectedRow + 1))
   // Past the loaded rows, the sentinel asks the API for the next window.
@@ -642,6 +645,10 @@ function MailboxPage() {
                 const drafts = composerOpen ? { ...local.drafts, [conversation.id]: draft } : local.drafts
                 if (save({ ...local, drafts, listOrder: event.target.value === 'oldest' ? 'oldest' : 'newest' })) clearSelection()
               }}><option value="newest">{t("Plus récent")}</option><option value="oldest">{t("Plus ancien")}</option></select></label>
+              {mailbox.members?.length ? <label className="member-filter" title={t("Mails attribués à cette personne, ou auxquels elle a répondu, ou dont elle a changé le statut, le dossier ou les labels")}><span>{t("Traité par")}</span><select aria-label={t("Traité par")} value={memberId ?? ''} onChange={(event) => { setMemberId(event.target.value || null); clearSelection() }}>
+                <option value="">{t("Traités par tout le monde")}</option>
+                {mailbox.members.filter((member) => member.active !== false || member.id === memberId).map((member) => <option key={member.id} value={member.id}>{member.id === mailbox.currentMemberId ? t("{0} (moi)", member.name) : member.name}</option>)}
+              </select></label> : null}
               </div>
               <div className="search-field"><Icon name="search" /><input aria-label={t("Rechercher les échanges")} placeholder={t("Rechercher un échange…")} value={query} onChange={(event) => { setQuery(event.target.value); clearSelection() }} /></div>
               <div className="filters" role="group" aria-label={t("État des conversations")}>{[['all', t("Tous")], ['unread', t("Non lus")], ['open', t("À traiter")], ['waiting', t("En attente")], ['closed', t("Terminés")]].map(([key, label]) => <button key={key} aria-pressed={status === key} onClick={() => { setStatus(key); clearSelection() }}>{label}</button>)}</div>

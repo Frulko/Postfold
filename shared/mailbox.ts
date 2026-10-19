@@ -38,14 +38,15 @@ export type ConversationState = Pick<Conversation, 'id' | 'unread' | 'status'> &
 export type ConversationPatch = Partial<Pick<Conversation, 'unread' | 'status' | 'projectId' | 'assigneeId'>> & { addLabelIds?: string[]; removeLabelIds?: string[] }
 export type ConversationUpdate = ConversationPatch & { targets: { id: string; revision: number }[] }
 // Live mailboxes are read in windows: the list filters, sorts and pages in PostgreSQL; `include` keeps the open thread loaded.
-export type MailboxQuery = { projectId?: string | null; status?: 'all' | 'unread' | 'open' | 'waiting' | 'closed'; labelId?: string | null; query?: string
+// `memberId` keeps conversations assigned to a colleague or that this colleague answered or changed.
+export type MailboxQuery = { projectId?: string | null; status?: 'all' | 'unread' | 'open' | 'waiting' | 'closed'; labelId?: string | null; memberId?: string | null; query?: string
   threads?: boolean; order?: 'newest' | 'oldest'; cursor?: string | null; limit?: number; include?: string[] }
 export function isMailboxQuery(value: unknown): value is MailboxQuery {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const item = value as MailboxQuery
   const id = (v: unknown) => typeof v === 'string' && v.length > 0 && v.length <= 100
-  return Object.keys(item).every((key) => ['projectId', 'status', 'labelId', 'query', 'threads', 'order', 'cursor', 'limit', 'include'].includes(key)) &&
-    (item.projectId == null || id(item.projectId)) && (item.labelId == null || id(item.labelId)) &&
+  return Object.keys(item).every((key) => ['projectId', 'status', 'labelId', 'memberId', 'query', 'threads', 'order', 'cursor', 'limit', 'include'].includes(key)) &&
+    (item.projectId == null || id(item.projectId)) && (item.labelId == null || id(item.labelId)) && (item.memberId == null || id(item.memberId)) &&
     (item.status === undefined || ['all', 'unread', 'open', 'waiting', 'closed'].includes(item.status)) &&
     (item.query === undefined || (typeof item.query === 'string' && item.query.length <= 200)) &&
     (item.threads === undefined || typeof item.threads === 'boolean') && (item.order === undefined || item.order === 'newest' || item.order === 'oldest') &&

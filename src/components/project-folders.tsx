@@ -1,7 +1,11 @@
 import { useI18n } from '../lib/i18n'
-import { useId, useLayoutEffect, useRef, useState, type DragEvent } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type DragEvent } from 'react'
 import type { Mailbox, Project } from '../../shared/mailbox'
 import { projectColor, projectColors, projectSorts, projectPath, projectTree, sortProjects, type ProjectInput, type ProjectSort } from '../../shared/projects'
+
+// Folders start collapsed (live mailboxes hold thousands); the ones a reader opens are remembered in this browser.
+const openKey = 'postfold-open-folders'
+const readOpen = (): string[] => { try { const value = JSON.parse(localStorage.getItem(openKey) ?? '[]'); return Array.isArray(value) ? value : [] } catch { return [] } }
 import { Icon } from './icon'
 
 const colorNames = { green: 'Vert', orange: 'Orange', blue: 'Bleu', purple: 'Violet', rose: 'Rose', slate: 'Gris' }
@@ -21,7 +25,7 @@ export function ProjectFolders({ mailbox, counts, revision, currentId, sort, ord
   onMailLeave: (event: DragEvent<HTMLDivElement>) => void
   onMailDrop: (event: DragEvent<HTMLDivElement>, id: string) => void
 }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const id = useId()
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState(false)
@@ -31,7 +35,7 @@ export function ProjectFolders({ mailbox, counts, revision, currentId, sort, ord
   const [positionChanged, setPositionChanged] = useState(false)
   const [expectedRevision, setExpectedRevision] = useState(revision)
   const [error, setError] = useState('')
-  const [collapsed, setCollapsed] = useState<string[]>([])
+  const [opened, setOpened] = useState<string[]>([])
   const [dragging, setDragging] = useState<string | null>(null)
   const [target, setTarget] = useState<{ id: string; placement: 'before' | 'inside' | 'after' } | null>(null)
   const dialog = useRef<HTMLDialogElement>(null)
@@ -40,16 +44,31 @@ export function ProjectFolders({ mailbox, counts, revision, currentId, sort, ord
   const dragged = useRef<string | null>(null)
   const keyboardHandle = useRef<HTMLButtonElement | null>(null)
   const manual = sortProjects(mailbox.projects, 'manual', order)
+  const children = new Map<string | null, Project[]>()
+  for (const item of manual) { const list = children.get(item.parentId ?? null); if (list) list.push(item); else children.set(item.parentId ?? null, [item]) }
+  const parents = new Map(mailbox.projects.map((project) => [project.id, project.parentId ?? null]))
+  // The selected folder's ancestors stay open so it is always visible.
+  const ancestors = new Set<string>()
+  for (let id = currentId ? parents.get(currentId) ?? null : null, depth = 0; id && depth < 100; id = parents.get(id) ?? null, depth++) ancestors.add(id)
+  const isOpen = (id: string) => opened.includes(id) || ancestors.has(id)
+  const collapsed = [...children.keys()].filter((key): key is string => !!key && !isOpen(key))
   const visible = projectTree(mailbox.projects, sort, order, collapsed, query)
+  const isInside = (id: string, ancestorId: string) => { for (let item = parents.get(id) ?? null, depth = 0; item && depth < 100; item = parents.get(item) ?? null, depth++) if (item === ancestorId) return true; return false }
   // Folder badges include subfolders. Live mailboxes send per-folder totals; the demo counts its loaded conversations.
   const totals = new Map<string, number>()
-  const parents = new Map(mailbox.projects.map((project) => [project.id, project.parentId ?? null]))
   const direct = counts ? Object.entries(counts) : [...mailbox.conversations.reduce((tally, item) => tally.set(item.projectId, (tally.get(item.projectId) ?? 0) + 1), new Map<string, number>())]
   for (const [folderId, count] of direct) for (let id: string | null = folderId, depth = 0; id && depth < 100; id = parents.get(id) ?? null, depth++) totals.set(id, (totals.get(id) ?? 0) + count)
-  const siblings = manual.filter((item) => (item.parentId ?? null) === (input.parentId ?? null))
+  const siblings = children.get(input.parentId ?? null) ?? []
   const siblingCount = siblings.filter((item) => item.id !== editingId).length
   const canReorder = sort === 'manual' && !query.trim() && !disabled
   const sharedProject = editingId ? mailbox.projects.find((item) => item.id === editingId) : undefined
+
+  useEffect(() => setOpened(readOpen()), [])
+  function toggle(id: string, open = !isOpen(id)) {
+    const next = open ? [...new Set([...opened, id])] : opened.filter((item) => item !== id)
+    setOpened(next)
+    try { localStorage.setItem(openKey, JSON.stringify(next)) } catch { /* Storage blocked: the tree resets on reload. */ }
+  }
 
   useLayoutEffect(() => {
     const handle = keyboardHandle.current
@@ -80,19 +99,19 @@ export function ProjectFolders({ mailbox, counts, revision, currentId, sort, ord
     <div className="folder-content" id={`${id}-folders`}>
     <div className="folder-tools">
       <div className="folder-search"><Icon name="search" /><input aria-label={t("Rechercher un dossier")} placeholder={t("Code ou nom du dossier…")} value={query} onChange={(event) => setQuery(event.target.value)} /></div>
-      <label className="folder-sort"><span className="sr-only">{t("Trier les dossiers")}</span><select aria-label={t("Trier les dossiers")} value={sort} disabled={disabled} onChange={(event) => onSort(event.target.value as ProjectSort)}>{Object.entries(projectSorts).map(([key, label]) => <option key={key} value={key}>{t(label)}</option>)}</select><span className="shared-label" title={t("Réglages communs à toute l’équipe")}><Icon name="users" /></span></label>
+      <div className="folder-sort"><select aria-label={t("Trier les dossiers")} title={t("Tri partagé avec l’équipe, appliqué à chaque niveau de sous-dossiers")} value={sort} disabled={disabled} onChange={(event) => onSort(event.target.value as ProjectSort)}>{Object.entries(projectSorts).map(([key, label]) => <option key={key} value={key}>{t(label)}</option>)}</select><button className="icon-button folder-collapse-all" aria-label={t("Tout replier")} title={t("Tout replier")} disabled={!opened.length} onClick={() => { setOpened([]); try { localStorage.removeItem(openKey) } catch { /* Storage blocked. */ } }}><Icon name="collapse" /></button></div>
     </div>
-    <p className="folder-hint">{sort !== 'manual' ? t("Tri partagé avec l’équipe") : query.trim() ? t("Effacez la recherche pour réordonner") : t("Glisser la poignée pour réordonner")}</p>
+    {sort === 'manual' && query.trim() ? <p className="folder-hint">{t("Effacez la recherche pour réordonner")}</p> : null}
     <nav className="project-nav" aria-label={t("Projets")}>
       {visible.map(({ project, depth }) => {
         const count = totals.get(project.id) ?? 0
-        const hasChildren = mailbox.projects.some((item) => item.parentId === project.id)
-        const siblingRows = manual.filter((item) => (item.parentId ?? null) === (project.parentId ?? null))
+        const hasChildren = children.has(project.id)
+        const siblingRows = children.get(project.parentId ?? null) ?? []
         const index = siblingRows.findIndex((item) => item.id === project.id)
-        return <div key={project.id} data-project-id={project.id} data-depth={depth} className={`folder-row ${currentId === project.id ? 'selected' : ''} ${dragging === project.id ? 'folder-dragging' : ''} ${target?.id === project.id ? `insert-${target.placement}` : ''} ${dropTarget === project.id ? 'drop-target' : ''} ${movingMail ? 'drop-available' : ''}`} style={{ marginLeft: depth * 12 }}
+        return <div key={project.id} data-project-id={project.id} data-depth={depth} className={`folder-row ${currentId === project.id ? 'selected' : ''} ${dragging === project.id ? 'folder-dragging' : ''} ${target?.id === project.id ? `insert-${target.placement}` : ''} ${dropTarget === project.id ? 'drop-target' : ''} ${movingMail ? 'drop-available' : ''}`} style={{ marginLeft: depth * 14 }}
           onDragOver={(event) => {
             if (!dragged.current) { onMailOver(event, project.id); return }
-            if (!canReorder || dragged.current === project.id || projectPath(mailbox.projects, project.id).startsWith(`${projectPath(mailbox.projects, dragged.current)} /`)) return
+            if (!canReorder || dragged.current === project.id || isInside(project.id, dragged.current)) return
             event.preventDefault(); event.dataTransfer.dropEffect = 'move'
             const rect = event.currentTarget.getBoundingClientRect()
             const ratio = (event.clientY - rect.top) / rect.height
@@ -102,7 +121,7 @@ export function ProjectFolders({ mailbox, counts, revision, currentId, sort, ord
           onDrop={(event) => {
             if (!dragged.current) { onMailDrop(event, project.id); return }
             event.preventDefault()
-            if (canReorder && target?.id === project.id) { void onReorder(dragged.current, project.id, target.placement); if (target.placement === 'inside') setCollapsed((current) => current.filter((item) => item !== project.id)) }
+            if (canReorder && target?.id === project.id) { void onReorder(dragged.current, project.id, target.placement); if (target.placement === 'inside') toggle(project.id, true) }
             finishDrag()
           }}>
           {sort === 'manual' ? <button className="folder-grip" draggable={canReorder} disabled={!canReorder} aria-label={t("Réordonner {0}", projectPath(mailbox.projects, project.id))} aria-describedby={`${id}-reorder-help`} title={t("Glisser, ou utiliser les flèches ↑ ↓ au clavier")}
@@ -119,11 +138,12 @@ export function ProjectFolders({ mailbox, counts, revision, currentId, sort, ord
               const next = siblingRows[index + (event.key === 'ArrowUp' ? -1 : 1)]
               if (next) { keyboardHandle.current = event.currentTarget; void onReorder(project.id, next.id, event.key === 'ArrowDown' ? 'after' : 'before') }
             }}><Icon name="grip" /></button> : null}
-          {hasChildren ? <button className="folder-collapse" aria-label={`${collapsed.includes(project.id) ? t("Déplier") : t("Replier")} ${project.name}`} aria-expanded={!collapsed.includes(project.id)} onClick={() => setCollapsed((current) => current.includes(project.id) ? current.filter((item) => item !== project.id) : [...current, project.id])}><Icon name="chevron" /></button> : <span className="folder-branch" aria-hidden="true" />}
-          <button className="project-button" aria-current={currentId === project.id ? 'page' : undefined} onClick={() => onSelect(project.id)} title={projectPath(mailbox.projects, project.id)}>
+          {hasChildren ? <button className="folder-collapse" aria-label={`${isOpen(project.id) || query.trim() ? t("Replier") : t("Déplier")} ${project.name}`} aria-expanded={isOpen(project.id) || !!query.trim()} disabled={!!query.trim()} onClick={() => toggle(project.id)}><Icon name="chevron" /></button> : <span className="folder-branch" aria-hidden="true" />}
+          <button className="project-button" aria-current={currentId === project.id ? 'page' : undefined} onClick={() => onSelect(project.id)} title={projectPath(mailbox.projects, project.id)}
+            onKeyDown={(event) => { if (hasChildren && !query.trim() && (event.key === 'ArrowRight' || event.key === 'ArrowLeft')) { event.preventDefault(); toggle(project.id, event.key === 'ArrowRight') } }}>
             <span className="folder-icon" style={{ color: projectColor(project.color) }}><Icon name="folder" /></span>
             <span className="folder-text">{!project.parentId && project.code !== null ? <small>{project.code ?? project.id}</small> : null}<span>{project.name}</span></span>
-            <b aria-label={t("{0} conversation{1}", count, count > 1 ? 's' : '')}>{count}</b>
+            {count ? <b aria-label={t("{0} conversation{1}", count, count > 1 ? 's' : '')}>{count.toLocaleString(locale)}</b> : null}
           </button>
           <button className="folder-edit icon-button" aria-label={t("Modifier le dossier {0}", projectPath(mailbox.projects, project.id))} title={t("Modifier le dossier")} disabled={disabled} onClick={() => open(project)}><Icon name="edit" /></button>
         </div>
