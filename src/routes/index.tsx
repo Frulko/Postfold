@@ -5,7 +5,7 @@ import { deleteDraftFiles } from '../lib/draft-attachments'
 import { useI18n } from '../lib/i18n'
 import { Suspense, lazy, useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
-import { compareMessages, filterConversations, includesContact, mailboxRows, threadContacts, threadKey, updateSelection, type MailOrder } from '../lib/mailbox'
+import { compareMessages, filterConversations, includesContact, mailboxRows, suggestProjects, threadContacts, threadKey, updateSelection, type MailOrder } from '../lib/mailbox'
 import { getDemoMailbox, saveProjectSettings, updateConversationState, syncMailbox, sendReply } from '../server/demo'
 import { Icon } from '../components/icon'
 import { ProjectPicker } from '../components/project-picker'
@@ -169,6 +169,8 @@ function MailboxPage() {
     (inspectedContact?.threadId === threadKey(conversation) ? participants.find((item) => item.id === inspectedContact.id) : undefined) ?? replyContact
   const threadSubject = mailbox.conversations.find((item) => item.id === threadKey(conversation))?.subject ?? conversation.subject.replace(/^re:\s*/i, '')
   const readingIds = threadMessages.map((item) => item.id)
+  const matchingProjects = suggestProjects(mailbox.projects, threadMessages)
+  const filingSuggestions = matchingProjects.filter((target) => threadMessages.some((item) => item.projectId !== target.id))
   const showConversation = mailbox.conversations.length > 0 && (!projectId || filterConversations(mailbox, projectId, '').some((item) => readingIds.includes(item.id)))
   const delivery = mailbox.deliveries?.find((item) => item.targetId === conversation.id)
   const currentConversation = useRef(conversation.id)
@@ -598,7 +600,14 @@ function MailboxPage() {
             {view === 'mail' ? showConversation ? <>
               <header className="reading-context"><div><strong title={displayMode === 'threads' ? threadSubject : conversation.subject}>{displayMode === 'threads' ? threadSubject : conversation.subject}</strong><small title={participants.map(person => person.name).join(', ')}>{projectPath(mailbox.projects, project.id)} · {participants.map(person => person.name).join(', ') || replyContact.name}</small></div><span className={`status ${conversation.status}`}>{t(statuses[conversation.status])}</span><button className="icon-button" title={t('Préparer une réponse')} aria-label={t('Préparer une réponse')} onClick={() => beginReply()} disabled={conversation.outgoing}><Icon name="reply" /></button><button className="icon-button contact-toggle" aria-controls="contact-profile" aria-expanded={!contactCollapsed} aria-label={t(contactCollapsed ? 'Afficher la fiche contact' : 'Masquer la fiche contact')} title={t(contactCollapsed ? 'Afficher la fiche contact' : 'Masquer la fiche contact')} disabled={!storageReady} onClick={toggleContact}><Icon name="users" /></button></header>
               <div className="reading-toolbar"><ConversationActions unread={threadMessages.some((item) => item.unread)} status={conversation.status} disabled={stateBusy} onChange={(patch) => changeConversations(readingIds, patch)} /><LabelPicker labels={mailbox.labels ?? []} conversations={threadMessages} disabled={stateBusy} onChange={(patch) => changeConversations(readingIds, patch)} /><AssignmentPicker members={mailbox.members ?? []} currentId={mailbox.currentMemberId} conversations={threadMessages} disabled={stateBusy} onChange={(patch) => changeConversations(readingIds, patch)} /></div>
-              <div className="message-heading"><span className="eyebrow">{projectPath(mailbox.projects, project.id)}</span><h2>{displayMode === 'threads' ? threadSubject : conversation.subject}</h2><p>{t("Un échange avec")} {participants.map((person) => person.name).join(', ') || replyContact.name}</p>
+              <div className="message-heading"><span className="eyebrow">{projectPath(mailbox.projects, project.id)}</span><div className="message-subject"><h2>{displayMode === 'threads' ? threadSubject : conversation.subject}</h2>
+                {filingSuggestions.length ? <div className="filing-suggestions" role="group" aria-label={t('Classement proposé')}>
+                  {filingSuggestions.map((target) => {
+                    const label = t(displayMode === 'threads' ? 'Ranger la conversation dans {0}' : 'Ranger le mail dans {0}', projectPath(mailbox.projects, target.id))
+                    return <button key={target.id} className="filing-suggestion" title={label} aria-label={label} disabled={stateBusy || !storageReady || threadMessages.some((item) => item.imapReady === false)} onClick={() => void move(readingIds, target.id)}><Icon name="folder" />{t('Ranger → {0}', target.code ?? target.id)}</button>
+                  })}
+                </div> : null}
+              </div><p>{t("Un échange avec")} {participants.map((person) => person.name).join(', ') || replyContact.name}</p>
                 {displayMode === 'threads' ? <div className="thread-options"><span>{t("{0} mails dans ce fil", threadMessages.length)}</span><label className="mail-order"><span>{t("Ordre")}</span><select aria-label={t("Ordre des messages du fil")} value={conversationOrder} disabled={!storageReady} onChange={(event) => {
                   const drafts = composerOpen ? { ...local.drafts, [conversation.id]: draft } : local.drafts
                   const order = event.target.value === 'oldest' ? 'oldest' : 'newest'

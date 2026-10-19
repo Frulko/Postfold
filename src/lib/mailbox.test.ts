@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { filterConversations, filterProjects, moveConversations, updateSelection, type Mailbox } from './mailbox.ts'
+import { filterConversations, filterProjects, moveConversations, suggestProjects, updateSelection, type Mailbox } from './mailbox.ts'
 import { isProjectSettings, positionProject, prepareProject, sortProjects } from '../../shared/projects.ts'
 import { applyConversationStates, isConversationUpdate, mergeConversationStates } from '../../shared/conversation-state.ts'
 
@@ -20,6 +20,34 @@ test('la recherche combine le projet et le contact sans dépendre des accents', 
   assert.equal(filterProjects(mailbox.projects, 'inconnu').length, 0)
   mailbox.conversations[0].sender = { name: 'Julie', email: 'support@example.test' }
   assert.equal(filterConversations(mailbox, null, 'support@example.test').length, 1)
+})
+
+test('filing suggestions match complete visible project codes in mail subjects', () => {
+  const projects = [
+    { id: '1842', name: 'Access', color: 'blue' },
+    { id: 'f_onboarding', code: 'IT-2056', name: 'Onboarding', color: 'purple' },
+    { id: 'f_backup', code: 'OPS.21_70', name: 'Backups', color: 'green' },
+    { id: 'inbox', code: null, name: 'INBOX', color: 'blue' },
+    { id: 'f_vpn', parentId: '1842', name: 'VPN', color: 'blue' },
+  ]
+  const ids = (...subjects: string[]) => suggestProjects(projects, subjects.map(subject => ({ subject }))).map(project => project.id)
+  for (const subject of ['[1842] VPN', 'Re: #1842 — VPN', 'VPN / 1842', '1842: VPN']) assert.deepEqual(ids(subject), ['1842'])
+  assert.deepEqual(ids('Re: [it-2056] Laptop'), ['f_onboarding'])
+  assert.deepEqual(ids('[ops.21_70] Restore'), ['f_backup'])
+  for (const subject of ['11842', '18420', 'X1842', '1842é', '1842-extra', '1842_more', '1842.1', 'opsX21_70', 'f_onboarding', 'inbox', 'f_vpn', 'Unknown 9999', '']) assert.deepEqual(ids(subject), [], subject)
+  assert.deepEqual(ids(), [])
+  assert.deepEqual(ids('[1842] VPN', 'Re: [1842] VPN', '[IT-2056] Laptop'), ['1842', 'f_onboarding'])
+  assert.deepEqual(ids('[1842] and [IT-2056]'), ['1842', 'f_onboarding'])
+})
+
+test('filing suggestions inspect the displayed mail or all messages of a thread without changing them', () => {
+  const projects = [{ id: '1842', name: 'Access', color: 'blue' }, { id: '2056', name: 'Onboarding', color: 'purple' }]
+  const messages = [{ subject: 'VPN', projectId: '2056' }, { subject: 'Re: [1842] VPN', projectId: '2056' }]
+  const original = structuredClone(messages)
+  assert.deepEqual(suggestProjects(projects, [messages[0]]), [])
+  assert.deepEqual(suggestProjects(projects, messages), [projects[0]])
+  assert.deepEqual(messages, original)
+  assert.deepEqual(suggestProjects([...projects, { ...projects[0], id: 'f_access', code: '1842' }], messages).map(project => project.id), ['1842', 'f_access'])
 })
 
 test('sélection par plage et déplacement du lot sans modifier les autres échanges', () => {

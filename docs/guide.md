@@ -17,6 +17,7 @@ Postfold brings project folders, conversation tracking and contact context into 
 | Assignment and activity | Assign to yourself or a known teammate, remove assignments, apply in batches and inspect the latest 50 recorded actions. Keycloak identities supply verified authors; concurrent writes use revision checks. |
 | Display modes | All messages with direct reply controls, or threads with counts and expandable messages. Grouping uses explicit thread IDs; display preference stays browser-local. |
 | Selection and filing | Checkboxes, range selection, select all, first-gesture drag-and-drop, a drag preview with a count badge, highlighted drop targets and a searchable destination picker. Filing uses revision checks and moves native IMAP messages in live mode. |
+| Suggested filing | Recognizes complete project codes in message subjects and offers explicit filing in the reader for a single message or an entire thread. |
 | Labels | Shared creation, renaming, colors, ordering, deletion, search, filtering and single/batch assignment. Deleting a label removes it from every conversation in one transaction. |
 | Contacts | Contact details, associated projects, conversation history and browser-local notes. |
 | Drafts | Save and Send controls together; local draft persistence and save on conversation change. Send stays disabled until a mailbox is connected. |
@@ -172,6 +173,10 @@ The API reads its process environment; it does **not** automatically load `.env.
 Use a separate database when overriding `DATABASE_URL` for tests. API tests create and remove an isolated demo mailbox; they do not change the normal demo mailbox.
 
 ## Working with conversations
+
+The reader proposes filing when a subject contains an existing project code, for example `[1842] VPN`, `Re: #1842 — VPN` or `1842: VPN`. Matching ignores case and requires a complete code: `11842` or `1842-extra` does not match `1842`. Letters, numbers, dots, underscores and hyphens count as part of a code. Live IMAP folders use their visible project code rather than their generated technical ID; folders without a code are ignored.
+
+In **All messages**, only the displayed mail's subject is inspected and the filing button moves that mail. In **Conversations**, subjects of all known messages in the thread are inspected and the button moves the whole thread, including messages outside the current filter. When several projects match, the reader lists the possible destinations and asks you to choose. Already completed destinations are omitted. Nothing moves until you click; filing uses the existing shared revision checks and native IMAP move in live mode.
 
 Opening a conversation marks it read, including the initially displayed conversation and openings from contact history. Selecting a checkbox only selects it. Marking the open conversation unread keeps it unread through refreshes until it is opened again. Reading a conversation does not close its support workflow.
 

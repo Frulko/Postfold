@@ -9,6 +9,17 @@ export function filterProjects(projects: Project[], query: string) {
   return projects.filter((project) => searchable(projectPath(projects, project.id)).includes(needle))
 }
 
+// Match visible project codes, never generated IMAP folder IDs.
+export function suggestProjects(projects: Project[], messages: Pick<Conversation, 'subject'>[]): Project[] {
+  return projects.filter((project) => {
+    const code = project.code === undefined ? project.parentId ? null : project.id : project.code
+    if (!code) return false
+    const escaped = code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const pattern = new RegExp(`(^|[^\\p{L}\\p{N}._-])${escaped}(?=$|[^\\p{L}\\p{N}._-])`, 'iu')
+    return messages.some((message) => pattern.test(message.subject))
+  })
+}
+
 export function filterConversations(mailbox: Mailbox, projectId: string | null, query: string) {
   const needle = searchable(query.trim())
   return mailbox.conversations.filter((conversation) => {

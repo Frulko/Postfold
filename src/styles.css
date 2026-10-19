@@ -258,6 +258,13 @@ h1 { font-size: 20px; font-weight: 650; letter-spacing: -.6px; line-height: 1.35
 .reading-pane { padding: 0 28px 30px; min-width: 0; min-height: 0; overflow-y: auto; }
 .reading-toolbar { position: relative; z-index: 2; background: #fff; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; min-height: 52px; padding: 6px 0; border-bottom: 1px solid #f0f0f2; margin-bottom: 18px; }
 .row-assignee { display: grid; place-items: center; width: 22px; height: 22px; flex-shrink: 0; border-radius: 5px; background: var(--soft); color: var(--muted); font-size: 9px; }
+.message-subject { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 12px; }
+.message-subject h2 { flex: 1 1 200px; min-width: 0; }
+.filing-suggestions { display: flex; flex-wrap: wrap; gap: 14px 8px; max-width: 100%; }
+.filing-suggestion { position: relative; display: inline-flex; align-items: center; gap: 5px; min-height: 28px; min-width: 40px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 5px; background: #fff; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.filing-suggestion::before { content: ''; position: absolute; inset: -7px 0; }
+.filing-suggestion:hover:not(:disabled) { background: var(--soft); color: var(--ink); }
+.filing-suggestion .icon { width: 14px; height: 14px; flex-shrink: 0; }
 .message-heading { padding-bottom: 24px; }
 .message-heading .eyebrow { display: inline-block; background: #fafafa; border: 1px solid var(--line); border-radius: 5px; color: #52525b; font-size: 10px; padding: 4px 7px; margin-bottom: 12px; }
 .message-heading h2, .contact-history h2 { font-size: 24px; font-weight: 650; letter-spacing: -.7px; line-height: 1.35; }

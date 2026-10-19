@@ -1,6 +1,10 @@
 export type Locale = 'fr' | 'en'
 
 const english: Record<string, string> = {
+  "Classement proposé": "Suggested filing",
+  "Ranger → {0}": "File → {0}",
+  "Ranger le mail dans {0}": "File message in {0}",
+  "Ranger la conversation dans {0}": "File conversation in {0}",
   "Mo": "MiB",
   "Archives mail": "Mail archives",
   "Retrouvez et restaurez les mails conservés par Postfold.": "Find and restore messages preserved by Postfold.",
