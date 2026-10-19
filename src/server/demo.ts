@@ -8,10 +8,10 @@ import { isMailAccountUpdate, isReplyRequest, type MailAccountSettings } from '.
 import { authMode } from '../../shared/auth'
 import { isArchiveId, isArchiveSearch, isArchiveRestore, isMessageRef, isAttachmentRef, type MailArchivePage, type MessageContent } from '../../shared/mail-archive'
 
-export function apiPath(path: string) {
+function apiPath(path: string) {
   return `${process.env.API_ORIGIN ?? 'http://127.0.0.1:4000'}${process.env.MAILBOX_MODE === 'imap' ? '/mailbox' : '/demo'}${path}`
 }
-export function apiHeaders(): Record<string, string> {
+function apiHeaders(): Record<string, string> {
   if (authMode() === 'keycloak') return { 'Content-Type': 'application/json', Cookie: getRequestHeader('cookie') ?? '', Origin: process.env.POSTFOLD_ORIGIN ?? '' }
   return { 'Content-Type': 'application/json', ...(process.env.MAILBOX_MODE === 'imap' ? { Authorization: getRequestHeader('authorization') ?? '' } : {}) }
 }
