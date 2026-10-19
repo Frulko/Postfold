@@ -38,3 +38,5 @@ export type ConversationState = Pick<Conversation, 'id' | 'unread' | 'status'> &
 export type ConversationPatch = Partial<Pick<Conversation, 'unread' | 'status' | 'projectId' | 'assigneeId'>> & { addLabelIds?: string[]; removeLabelIds?: string[] }
 export type ConversationUpdate = ConversationPatch & { targets: { id: string; revision: number }[] }
 export type DemoMailbox = Mailbox & { viewer?: import('./auth.js').Viewer; members?: Member[]; currentMemberId?: string; projectSettings: Omit<ProjectSettings, 'projects'>; conversationStates: ConversationState[]; connection?: { mode: 'imap'; email: string; lastSync: string | null; error: boolean; maxMessagesPerSync: number }; deliveries?: { targetId: string; status: 'sending' | 'sent' | 'uncertain'; sentCopy: boolean }[] }
+
+export type MailLogEntry = { seq: number; at: string; level: 'info' | 'warn' | 'error'; message: string; values: (string | number)[] }

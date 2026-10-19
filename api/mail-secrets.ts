@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
-import { Pool } from 'pg'
+import { Pool, type PoolClient } from 'pg'
 import { isMailAccount, type MailAccount } from '../shared/mail-account.js'
 
 export type SealedSecret = { version: 1; keyId: string; nonce: string; tag: string; ciphertext: string }
@@ -33,11 +33,11 @@ export function openSecret(value: SealedSecret, key: Buffer, accountId: string) 
   return Buffer.concat([cipher.update(Buffer.from(value.ciphertext, 'base64')), cipher.final()]).toString('utf8')
 }
 
-export async function initAccounts(pool: Pool) {
+export async function initAccounts(pool: Pool | PoolClient) {
   await pool.query('CREATE TABLE IF NOT EXISTS mail_accounts (id text PRIMARY KEY, secret jsonb NOT NULL)')
 }
 
-export async function saveAccount(pool: Pool, id: string, account: unknown) {
+export async function saveAccount(pool: Pool | PoolClient, id: string, account: unknown) {
   if (!/^[a-z0-9._-]{1,64}$/i.test(id) || !isMailAccount(account)) throw new Error('Invalid mailbox configuration; credentials were not saved.')
   const secret = sealSecret(JSON.stringify(account), mailboxKey(), id)
   await initAccounts(pool)

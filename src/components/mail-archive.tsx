@@ -7,7 +7,7 @@ import type { MailArchiveEntry, MailArchivePage } from '../../shared/mail-archiv
 import { Icon } from './icon'
 
 export function MailArchive({ projects, connected, onUpdated }: { projects: Project[]; connected: boolean; onUpdated(): void }) {
-  const { t, locale } = useI18n()
+  const { t, locale, size } = useI18n()
   const [page, setPage] = useState<MailArchivePage | null>(null)
   const [query, setQuery] = useState('')
   const [missingOnly, setMissingOnly] = useState(false)
@@ -35,10 +35,6 @@ export function MailArchive({ projects, connected, onUpdated }: { projects: Proj
   }, [query, missingOnly])
   useEffect(() => { if (restore) dialog.current?.showModal() }, [restore])
   const date = (value: string) => new Intl.DateTimeFormat(locale === 'en' ? 'en-GB' : 'fr-FR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
-  const size = (bytes: number) => {
-    const scale = bytes >= 1024 * 1024 ? 2 : bytes >= 1024 ? 1 : 0
-    return `${new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(bytes / 1024 ** scale)} ${t(['octets', 'Ko', 'Mo'][scale])}`
-  }
   async function download(item: MailArchiveEntry) {
     if (working) return
     setWorking(true); setError(''); setFeedback('')

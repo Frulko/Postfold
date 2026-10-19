@@ -37,7 +37,7 @@ services:
       POSTFOLD_ACCESS_FILE: /run/postfold/secrets/access.json
       MAILBOX_CA_FILE: ${MAILBOX_CA_FILE:-}
     volumes:
-      - ./secrets:/run/postfold/secrets:ro
+      - ${POSTFOLD_SECRETS_DIR:-./secrets}:/run/postfold/secrets:ro
     depends_on:
       db:
         condition: service_healthy

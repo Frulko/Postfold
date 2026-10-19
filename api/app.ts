@@ -1,5 +1,5 @@
 import 'reflect-metadata'
-import { Body, Controller, Get, HttpCode, Inject, Module, Optional, Param, Patch, Put, Post, Req, Res, UseGuards, UnauthorizedException, ForbiddenException, type CanActivate, type ExecutionContext } from '@nestjs/common'
+import { Body, Controller, Get, HttpCode, Inject, Module, Optional, Param, Patch, Put, Post, Query, Req, Res, UseGuards, UnauthorizedException, ForbiddenException, type CanActivate, type ExecutionContext } from '@nestjs/common'
 import type { NestExpressApplication } from '@nestjs/platform-express'
 import { NestFactory } from '@nestjs/core'
 import { demoMailbox, demoMembers } from './demo-mailbox.js'
@@ -9,6 +9,7 @@ import { MailStore } from './mail-store.js'
 import { checkAccess } from '../shared/access.js'
 import { authMode, type Viewer } from '../shared/auth.js'
 import { KeycloakSessions } from './keycloak.js'
+import { fetchRemoteImage } from './image-proxy.js'
 
 type AuthRequest = { headers: { authorization?: string; cookie?: string; origin?: string }; method: string; url: string; viewer?: Viewer }
 type AuthResponse = { setHeader(name: string, value: string | string[]): void; redirect(status: number, url: string): void }
@@ -112,6 +113,19 @@ class MailboxController {
   @Patch('conversations/state') conversations(@Body() input: unknown, @Req() request: AuthRequest) { return this.mailbox.updateConversations(input, request.viewer) }
   @Post('conversations/activity') @HttpCode(200) activity(@Body() ids: unknown) { return this.mailbox.activity(ids) }
   @Post('reply') reply(@Body() input: unknown, @Req() request: AuthRequest) { return this.mailbox.reply(input, request.viewer) }
+  @Get('account') account(@Req() request: AuthRequest) { return this.mailbox.accountSettings(request.viewer) }
+  @Get('image') async image(@Query('url') url: string, @Res() response: { status(code: number): { end(): void }; setHeader(name: string, value: string): void; send(value: Buffer): void }) {
+    try {
+      const image = await fetchRemoteImage(url)
+      response.setHeader('Content-Type', image.type)
+      response.setHeader('Cache-Control', 'private, max-age=86400')
+      response.setHeader('X-Content-Type-Options', 'nosniff')
+      response.setHeader('Content-Security-Policy', "default-src 'none'; sandbox")
+      response.send(image.body)
+    } catch { response.status(404).end() }
+  }
+  @Get('logs') logs(@Query('after') after: string, @Req() request: AuthRequest) { return this.mailbox.readLogs(after, request.viewer) }
+  @Put('account') updateAccount(@Body() input: unknown, @Req() request: AuthRequest) { return this.mailbox.updateAccount(input, request.viewer) }
   @Post('archives/search') @HttpCode(200) archives(@Body() input: unknown) { return this.mailbox.archives(input) }
   @Get('archives/:id/source') async archiveSource(@Param('id') id: string, @Res() response: { setHeader(name: string, value: string): void; send(value: Buffer): void }) {
     const source = await this.mailbox.archiveSource(id)
@@ -120,6 +134,8 @@ class MailboxController {
     response.setHeader('X-Content-Type-Options', 'nosniff')
     response.send(source)
   }
+  @Get('messages/:id/content') content(@Param('id') id: string) { return this.mailbox.messageContent(id) }
+  @Get('messages/:id/attachments/:index') attachment(@Param('id') id: string, @Param('index') index: string) { return this.mailbox.messageAttachment({ id, index: Number(index) }) }
   @Post('archives/restore') restore(@Body() input: unknown, @Req() request: AuthRequest) { return this.mailbox.restoreArchive(input, request.viewer) }
 }
 

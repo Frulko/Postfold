@@ -1,17 +1,17 @@
 import { isAuthoringChange } from '../../shared/authoring'
 import { createServerFn } from '@tanstack/react-start'
-import type { Activity, ConversationState, DemoMailbox, ProjectSettings } from '../../shared/mailbox'
+import type { Activity, ConversationState, DemoMailbox, MailLogEntry, ProjectSettings } from '../../shared/mailbox'
 import { isProjectSettings } from '../../shared/projects'
 import { isActivityIds, isConversationUpdate } from '../../shared/conversation-state'
 import { getRequestHeader } from '@tanstack/react-start/server'
-import { isReplyRequest } from '../../shared/mail-account'
+import { isMailAccountUpdate, isReplyRequest, type MailAccountSettings } from '../../shared/mail-account'
 import { authMode } from '../../shared/auth'
-import { isArchiveId, isArchiveSearch, isArchiveRestore, type MailArchivePage } from '../../shared/mail-archive'
+import { isArchiveId, isArchiveSearch, isArchiveRestore, isMessageRef, isAttachmentRef, type MailArchivePage, type MessageContent } from '../../shared/mail-archive'
 
-function apiPath(path: string) {
+export function apiPath(path: string) {
   return `${process.env.API_ORIGIN ?? 'http://127.0.0.1:4000'}${process.env.MAILBOX_MODE === 'imap' ? '/mailbox' : '/demo'}${path}`
 }
-function apiHeaders(): Record<string, string> {
+export function apiHeaders(): Record<string, string> {
   if (authMode() === 'keycloak') return { 'Content-Type': 'application/json', Cookie: getRequestHeader('cookie') ?? '', Origin: process.env.POSTFOLD_ORIGIN ?? '' }
   return { 'Content-Type': 'application/json', ...(process.env.MAILBOX_MODE === 'imap' ? { Authorization: getRequestHeader('authorization') ?? '' } : {}) }
 }
@@ -128,4 +128,53 @@ export const restoreMailArchive = createServerFn({ method: 'POST' })
       if ([400,404,409,503].includes(response.status)) return { ok: false, error: (await response.json()).message }
     } catch { /* Never automatically retry an IMAP APPEND after a timeout. */ }
     return { ok: false, error: 'Restoration could not be confirmed. The archive is safe; inspect IMAP before retrying.' }
+  })
+
+// Null means no archived MIME (demo mode or not captured yet): the reader falls back to the cached text body.
+export const getMessageContent = createServerFn({ method: 'POST' })
+  .validator((input: unknown) => { if (!isMessageRef(input)) throw new Error('Invalid message ID.'); return input })
+  .handler(async ({ data }): Promise<MessageContent | null> => {
+    if (process.env.MAILBOX_MODE !== 'imap') return null
+    const response = await fetch(apiPath(`/messages/${data}/content`), { headers: apiHeaders(), signal: AbortSignal.timeout(30_000) })
+    if (response.status === 404) return null
+    if (!response.ok) throw new Error('Message content unavailable.')
+    return response.json()
+  })
+
+export const downloadMessageAttachment = createServerFn({ method: 'POST' })
+  .validator((input: unknown) => { if (!isAttachmentRef(input)) throw new Error('Invalid attachment.'); return input })
+  .handler(async ({ data }): Promise<{ filename: string; contentType: string; content: string }> => {
+    if (process.env.MAILBOX_MODE !== 'imap') throw new Error('No mailbox connected.')
+    const response = await fetch(apiPath(`/messages/${data.id}/attachments/${data.index}`), { headers: apiHeaders(), signal: AbortSignal.timeout(30_000) })
+    if (!response.ok) throw new Error('Attachment could not be downloaded.')
+    return response.json()
+  })
+
+// Null when no mailbox is connected or the viewer is not an administrator.
+export const getMailAccount = createServerFn({ method: 'GET' }).handler(async (): Promise<MailAccountSettings | null> => {
+  if (process.env.MAILBOX_MODE !== 'imap') return null
+  const response = await fetch(apiPath('/account'), { headers: apiHeaders(), signal: AbortSignal.timeout(15_000) })
+  if (response.status === 403) return null
+  if (!response.ok) throw new Error('Mail account settings unavailable.')
+  return response.json()
+})
+
+export const saveMailAccount = createServerFn({ method: 'POST' })
+  .validator((input: unknown) => { if (!isMailAccountUpdate(input)) throw new Error('Invalid mail account settings.'); return input })
+  .handler(async ({ data }): Promise<{ ok: boolean; account?: MailAccountSettings; error?: string }> => {
+    if (process.env.MAILBOX_MODE !== 'imap') return { ok: false, error: 'No mailbox connected.' }
+    const response = await fetch(apiPath('/account'), { method: 'PUT', headers: apiHeaders(), body: JSON.stringify(data), signal: AbortSignal.timeout(200_000) })
+    if (response.ok) return { ok: true, account: await response.json() }
+    if ([400, 403, 409].includes(response.status)) return { ok: false, error: (await response.json()).message }
+    return { ok: false, error: 'Mail account settings could not be saved.' }
+  })
+
+export const getMailLogs = createServerFn({ method: 'POST' })
+  .validator((input: unknown) => { if (!Number.isSafeInteger(input) || (input as number) < 0) throw new Error('Invalid log cursor.'); return input as number })
+  .handler(async ({ data }): Promise<{ latest: number; entries: MailLogEntry[] } | null> => {
+    if (process.env.MAILBOX_MODE !== 'imap') return null
+    const response = await fetch(apiPath(`/logs?after=${data}`), { headers: apiHeaders(), signal: AbortSignal.timeout(15_000) })
+    if (response.status === 403) return null
+    if (!response.ok) throw new Error('Logs unavailable.')
+    return response.json()
   })

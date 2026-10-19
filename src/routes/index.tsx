@@ -18,6 +18,7 @@ import { ConversationActions } from '../components/conversation-actions'
 import { LabelManager, LabelPicker } from '../components/labels'
 import { AssignmentPicker } from '../components/assignment-picker'
 import { ConversationActivity } from '../components/conversation-activity'
+import { MessageBody, prefetchMessage } from '../components/message-body'
 
 const MailComposer = lazy(() => import('../components/mail-composer').then(module => ({ default: module.MailComposer })))
 const AuthoringPage = lazy(() => import('../components/authoring-settings').then(module => ({ default: module.AuthoringPage })))
@@ -26,6 +27,7 @@ export const Route = createFileRoute('/')({ loader: () => getDemoMailbox(), comp
 
 type Note = { id: string; contactId: string; body: string; createdAt: string }
 type LocalData = { notes: Note[]; drafts: Record<string, string | RichDraft>; sendRequests?: Record<string, string>; placements?: Record<string, string>; displayMode?: 'messages' | 'threads'; listOrder?: MailOrder; conversationOrder?: MailOrder; contactCollapsed?: boolean }
+const ROW_PAGE = 100
 const initials = (name: string) => name.split(' ').map((part) => part[0]).slice(0, 2).join('')
 const demoPresence = [
   { name: 'Julie', initials: 'JD', state: 'online', activity: 'Disponible' },
@@ -180,7 +182,20 @@ function MailboxPage() {
   const note = noteDrafts[contact.id] ?? ''
   const setNote = (body: string) => setNoteDrafts((current) => ({ ...current, [contact.id]: body }))
   const visibleIds = rows.map((item) => item.id)
-  const chosen = chosenIds.filter((id) => visibleIds.includes(id))
+  const visibleSet = new Set(visibleIds)
+  const chosen = chosenIds.filter((id) => visibleSet.has(id))
+  // ponytail: rows render in pages while scrolling (the selected row is always included); switch to windowing if the DOM itself grows too large.
+  const [rowLimit, setRowLimit] = useState(ROW_PAGE)
+  useEffect(() => setRowLimit(ROW_PAGE), [view, projectId, query, status, labelId, displayMode, listOrder])
+  const selectedRow = rows.findIndex((item) => item.messageIds.includes(selectedId))
+  const shownRows = rows.slice(0, Math.max(rowLimit, selectedRow + 1))
+  const moreRows = useCallback((node: HTMLDivElement | null) => {
+    if (!node) return
+    // A fresh sentinel per page re-checks visibility, so fast scrolling keeps loading until the viewport is filled.
+    const observer = new IntersectionObserver((entries) => { if (entries.some((entry) => entry.isIntersecting)) setRowLimit((limit) => limit + ROW_PAGE) }, { root: node.parentElement, rootMargin: '0px 0px 800px 0px' })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
   const allChosen = rows.length > 0 && chosen.length === rows.length
   const chosenMessages = expandRows(chosen)
 
@@ -576,12 +591,12 @@ function MailboxPage() {
             </> : null}
             </div>
             <div className="list-rows" tabIndex={0} role="region" aria-label={view === 'contacts' ? t("Liste des contacts") : t("Liste des conversations")}>
-              {view === 'mail' ? rows.length ? rows.map((item) => {
+              {view === 'mail' ? rows.length ? <>{shownRows.map((item) => {
                 const sender = item.sender ?? mailbox.contacts.find((person) => person.id === item.contactId)!
                 const folder = mailbox.projects.find((folder) => folder.id === item.projectId)!
                 return <div key={item.id} data-conversation-id={item.id} data-folder-id={item.projectId} className={`thread-row ${item.unread ? 'unread' : ''} ${item.messageIds.includes(selectedId) ? 'selected' : ''} ${chosen.includes(item.id) ? 'checked' : ''} ${draggingIds.includes(item.id) ? 'dragging' : ''}`} draggable={storageReady} onDragStart={(event) => startDrag(event, item.id)} onDragEnd={finishDrag}>
                   <label className="selection-hit row-selection"><input type="checkbox" aria-label={t("Sélectionner {0}", item.subject)} checked={chosen.includes(item.id)} onChange={(event) => choose(item.id, event.target.checked, event.nativeEvent instanceof MouseEvent && event.nativeEvent.shiftKey)} /></label>
-                  <button className="thread-open" aria-pressed={item.messageIds.includes(selectedId)} onClick={(event) => {
+                  <button className="thread-open" aria-pressed={item.messageIds.includes(selectedId)} onPointerEnter={() => { if (mailbox.connection) item.messageIds.slice(-3).forEach(prefetchMessage) }} onFocus={() => { if (mailbox.connection) item.messageIds.slice(-3).forEach(prefetchMessage) }} onClick={(event) => {
                     if (event.shiftKey || event.metaKey || event.ctrlKey) { choose(item.id, event.shiftKey || !chosen.includes(item.id), event.shiftKey); return }
                     if (openConversation(displayMode === 'threads' ? item.messageIds.at(-1)! : item.id, true)) { clearSelection(); selectionAnchor.current = item.id }
                   }}>
@@ -590,7 +605,7 @@ function MailboxPage() {
                   <p title={item.preview}>{item.preview}</p><div className="row-bottom"><span className="folder-label" title={projectPath(mailbox.projects, folder.id)}>{projectPath(mailbox.projects, folder.id)}</span>{item.assignee ? <span className="row-assignee" title={t("Attribué à {0}", item.assignee)} aria-label={t("Attribué à {0}", item.assignee)}>{initials(item.assignee)}</span> : null}<span className={`status ${item.status}`}>{t(statuses[item.status])}</span></div>{item.labelIds?.length ? <div className="message-labels">{(mailbox.labels ?? []).filter((label) => item.labelIds?.includes(label.id)).map((label) => <span className="label-chip" key={label.id}><span className="project-dot" style={{ backgroundColor: projectColor(label.color) }} />{label.name}</span>)}</div> : null}
                   </button>
                 </div>
-              }) : <div className="empty-state">{t("Aucun échange ne correspond à votre recherche.")}</div> : mailbox.contacts.map((person) => <button className={`contact-row ${person.id === contactId ? 'selected' : ''}`} key={person.id} onClick={() => { setContactId(person.id); setNotice('') }}>
+              })}{shownRows.length < rows.length ? <div key={shownRows.length} ref={moreRows} className="list-more" aria-hidden="true" /> : null}</> : <div className="empty-state">{t("Aucun échange ne correspond à votre recherche.")}</div> : mailbox.contacts.map((person) => <button className={`contact-row ${person.id === contactId ? 'selected' : ''}`} key={person.id} onClick={() => { setContactId(person.id); setNotice('') }}>
               <span className="contact-avatar">{initials(person.name)}</span><span><strong>{person.name}</strong><small>{person.company}</small></span><span className="contact-arrow"><Icon name="chevron" /></span>
             </button>)}
             </div>
@@ -617,7 +632,7 @@ function MailboxPage() {
               {threadMessages.map((message) => {
                 const sender = message.sender ?? mailbox.contacts.find((item) => item.id === message.contactId)!
                 const header = <><span className="contact-avatar">{initials(sender.name)}</span><div><strong>{sender.name}</strong><small>{sender.email}</small></div><time dateTime={message.sentAt} title={message.sentAt ? new Date(message.sentAt).toLocaleString(locale === 'en' ? 'en-GB' : 'fr-FR') : undefined}>{t(message.time)}</time></>
-                const body = <><div className="message-body">{message.body}</div><button className="message-reply secondary-button" disabled={message.outgoing} onClick={() => beginReply(message.id)}><Icon name="reply" />{t("Répondre à ce mail")}</button></>
+                const body = <><MessageBody id={message.id} text={message.body} sender={sender.email} live={!!mailbox.connection} /><button className="message-reply secondary-button" disabled={message.outgoing} onClick={() => beginReply(message.id)}><Icon name="reply" />{t("Répondre à ce mail")}</button></>
                 return displayMode === 'threads' ? <details className="message thread-message" key={message.id} data-message-id={message.id} open={message.id === selectedId || message.id === threadMessages[conversationOrder === 'oldest' ? threadMessages.length - 1 : 0]?.id}><summary>{header}<Icon name="chevron" /></summary>{body}</details> : <article className="message" key={message.id} data-message-id={message.id}><header>{header}</header>{body}</article>
               })}
               {composerOpen ? <Suspense fallback={<p>{t('Chargement de l’éditeur…')}</p>}><MailComposer key={`${conversation.id}:${storageKey}`} draft={draft} onReady={revealComposer} onChange={setDraft} recipient={replyContact} subject={conversation.subject} storageKey={`${storageKey}:${conversation.id}`} busy={sendBusy} feedback={notice} saved={JSON.stringify(richDraft(local.drafts[conversation.id])) === JSON.stringify(draft)} sendDisabled={!mailbox.connection || !storageReady || stateBusy || !!delivery || !!conversation.outgoing} sendHint={t(!mailbox.connection ? 'Connectez une boîte mail pour envoyer.' : delivery ? delivery.status === 'sent' ? 'Une réponse a déjà été envoyée à ce mail.' : 'Envoi en cours ou incertain : vérifiez Envoyés, ne renvoyez pas.' : 'Le brouillon sera sauvegardé avant l’envoi.')} onSave={() => { if (save({ ...localRef.current, drafts: { ...localRef.current.drafts, [conversation.id]: draft } })) setNotice(t('Brouillon enregistré dans ce navigateur. Aucun email envoyé.')) }} onFilesBusy={setComposerFilesBusy} onSend={mail => void send(mail)} /></Suspense> : <div className="reply-bar"><span>{conversation.outgoing ? t("Message envoyé") : local.drafts[conversation.id] ? t("Brouillon enregistré") : t("Aucune réponse préparée")}</span><button className="primary-button" disabled={conversation.outgoing} onClick={() => beginReply()}><Icon name="reply" />{local.drafts[conversation.id] ? t("Reprendre le brouillon") : t("Préparer une réponse")}</button></div>}

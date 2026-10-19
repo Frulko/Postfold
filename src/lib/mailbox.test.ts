@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { filterConversations, filterProjects, moveConversations, suggestProjects, updateSelection, type Mailbox } from './mailbox.ts'
+import { filterConversations, filterProjects, linkParts, moveConversations, splitQuoted, suggestProjects, updateSelection, type Mailbox } from './mailbox.ts'
 import { isProjectSettings, positionProject, prepareProject, sortProjects } from '../../shared/projects.ts'
 import { applyConversationStates, isConversationUpdate, mergeConversationStates } from '../../shared/conversation-state.ts'
 
@@ -186,4 +186,15 @@ test('long demo threads preserve individual senders and deduplicate visible cont
   assert.ok(filterConversations({ ...demoMailbox, conversations: ccOnly }, null, 'lea.bernard@example.test').length)
   assert.ok(includesContact(ccOnly[0], demoMailbox.contacts.find(person => person.id === 'lea')!))
   assert.equal(includesContact(ccOnly[0], demoMailbox.contacts.find(person => person.id === 'claire')!), false)
+})
+
+test('reader folds quoted history and signatures and links plain-text URLs and addresses', () => {
+  assert.deepEqual(splitQuoted('Merci !\n\nLe lun. 19 oct. 2026, Paul <paul@example.test> a\nécrit :\n> Bonjour'), ['Merci !', 'Le lun. 19 oct. 2026, Paul <paul@example.test> a\nécrit :\n> Bonjour'])
+  assert.deepEqual(splitQuoted('Thanks\nOn Mon, Paul wrote:\n> hi'), ['Thanks', 'On Mon, Paul wrote:\n> hi'])
+  assert.deepEqual(splitQuoted('Body\n-- \nJulie, IT'), ['Body', '-- \nJulie, IT'])
+  assert.deepEqual(splitQuoted('> only a quote'), ['> only a quote', ''])
+  assert.deepEqual(splitQuoted('---------- Forwarded message ---------\nDe : Paul'), ['---------- Forwarded message ---------\nDe : Paul', ''])
+  assert.deepEqual(linkParts('Voir https://example.test/a?b=1. ou écrire à it@example.test.'), [
+    { text: 'Voir ' }, { text: 'https://example.test/a?b=1', href: 'https://example.test/a?b=1' }, { text: '. ou écrire à ' },
+    { text: 'it@example.test', href: 'mailto:it@example.test' }, { text: '.' }])
 })

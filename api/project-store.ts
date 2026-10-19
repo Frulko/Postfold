@@ -109,7 +109,7 @@ export class ProjectStore implements OnApplicationShutdown {
     if (!members.find(m => m.id === viewer.id)?.active) throw new ForbiddenException('Your mailbox access has been disabled by an administrator.')
   }
 
-  private async canAdmin(actor: Member & { admin?: boolean }) {
+  protected async canAdmin(actor: Member & { admin?: boolean }) {
     return authMode() === 'basic' || actor.admin === true || (await this.members()).find(m => m.id === actor.id)?.role === 'admin'
   }
 

@@ -76,3 +76,16 @@ export function mailboxRows(messages: Conversation[], mode: 'messages' | 'thread
       labelIds: [...new Set(items.flatMap((item) => item.labelIds ?? []))], messageIds: ordered.map((item) => item.id), latestAt: latest.sentAt ?? '' }
   }).sort((a, b) => ((Date.parse(a.latestAt) || 0) - (Date.parse(b.latestAt) || 0)) * (order === 'oldest' ? 1 : -1))
 }
+
+const attribution = (line: string) => /^(on|le)\s.{0,250}(wrote|a\s+écrit)\s*:\s*$/i.test(line)
+// Folds the first reply quote, Outlook separator or "-- " signature; forwarded messages stay visible.
+export function splitQuoted(text: string): [string, string] {
+  const lines = text.split('\n')
+  const start = lines.findIndex((line, index) => lines.slice(0, index).some((before) => before.trim()) &&
+    (/^(>|--$|_{5,}$)/.test(line.trim()) || attribution(line.trim()) || attribution(`${line.trim()} ${lines[index + 1]?.trim() ?? ''}`)))
+  return start < 0 ? [text, ''] : [lines.slice(0, start).join('\n').trimEnd(), lines.slice(start).join('\n')]
+}
+
+const linkPattern = /(https?:\/\/[^\s<>"]+[^\s<>".,;:!?)\]'»]|[\w.+-]+@[\w-]+(?:\.[\w-]+)+)/
+export const linkParts = (text: string) => text.split(linkPattern).map((part, index) =>
+  index % 2 ? { text: part, href: part.includes('://') ? part : `mailto:${part}` } : { text: part })

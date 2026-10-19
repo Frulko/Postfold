@@ -29,3 +29,14 @@ export function isReplyRequest(value: unknown): value is ReplyRequest {
     (item.attachments === undefined || (Array.isArray(item.attachments) && item.attachments.length <= MAX_ATTACHMENTS && item.attachments.every(a => a && Object.keys(a).every(k => ['filename', 'contentType', 'content'].includes(k)) && typeof a.filename === 'string' && a.filename.length > 0 && a.filename.length <= 200 && !/[\\/\x00-\x1f]/.test(a.filename) && typeof a.contentType === 'string' && /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/i.test(a.contentType) && typeof a.content === 'string' && a.content.length > 0 && a.content.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(a.content)) && item.attachments.reduce((total, a) => total + a.content.length / 4 * 3 - (a.content.endsWith('==') ? 2 : a.content.endsWith('=') ? 1 : 0), 0) <= MAX_ATTACHMENT_BYTES)) &&
     typeof item.requestId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.requestId)
 }
+
+// Passwords never leave the API; an empty password in an update keeps the stored one.
+export type MailAccountSettings = Omit<MailAccount, 'imap' | 'smtp'> & { imap: Omit<MailEndpoint, 'password'>; smtp: Omit<MailEndpoint, 'password'> }
+export type MailAccountUpdate = MailAccount & { reset?: boolean }
+export function isMailAccountUpdate(value: unknown): value is MailAccountUpdate {
+  if (!value || typeof value !== 'object') return false
+  const item = value as MailAccountUpdate
+  // Placeholder credentials only satisfy the shape check; the API validates the merged account again.
+  const withPasswords = (endpoint: MailEndpoint) => endpoint && typeof endpoint === 'object' && typeof endpoint.password === 'string' && endpoint.password.length <= 4096 ? { ...endpoint, password: 'x' } : endpoint
+  return (item.reset === undefined || typeof item.reset === 'boolean') && isMailAccount({ ...item, imap: withPasswords(item.imap), smtp: withPasswords(item.smtp) })
+}

@@ -22,3 +22,8 @@ export function isArchiveRestore(value: unknown): value is ArchiveRestore {
   const item = value as ArchiveRestore
   return isArchiveId(item.id) && typeof item.folderId === 'string' && /^[a-z0-9][a-z0-9._-]{0,63}$/i.test(item.folderId)
 }
+export type MessageContent = { html: string | null; text: string; attachments: { index: number; filename: string; contentType: string; size: number }[] }
+export type AttachmentRef = { id: string; index: number }
+export const isMessageRef = (value: unknown): value is string => typeof value === 'string' && /^[\w-]{1,100}$/.test(value)
+export const isAttachmentRef = (value: unknown): value is AttachmentRef => !!value && typeof value === 'object' && isMessageRef((value as AttachmentRef).id) &&
+  Number.isInteger((value as AttachmentRef).index) && (value as AttachmentRef).index >= 0 && (value as AttachmentRef).index < 1000

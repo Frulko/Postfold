@@ -1,17 +1,17 @@
-import { BadRequestException, ConflictException, HttpException, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
+import { BadRequestException, ConflictException, ForbiddenException, HttpException, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
 import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { ImapFlow, type FetchMessageObject } from 'imapflow'
 import nodemailer from 'nodemailer'
 import { simpleParser } from 'mailparser'
-import { cleanEmailHtml } from './email-html.js'
+import { cleanEmailHtml, cleanIncomingHtml } from './email-html.js'
 import { ProjectStore } from './project-store.js'
-import { loadAccount } from './mail-secrets.js'
-import { isMailAddress, isReplyRequest, type MailAccount } from '../shared/mail-account.js'
+import { loadAccount, saveAccount } from './mail-secrets.js'
+import { isMailAccountUpdate, isMailAddress, isReplyRequest, type MailAccount, type MailAccountSettings } from '../shared/mail-account.js'
 import { isConversationUpdate, applyConversationStates } from '../shared/conversation-state.js'
 import { isProjectSettings } from '../shared/projects.js'
-import type { Conversation, ConversationState, ConversationUpdate, DemoMailbox, Member, Project } from '../shared/mailbox.js'
-import { isArchiveId, isArchiveSearch, isArchiveRestore, type MailArchiveEntry, type MailArchivePage } from '../shared/mail-archive.js'
+import type { Conversation, ConversationState, ConversationUpdate, DemoMailbox, MailLogEntry, Member, Project } from '../shared/mailbox.js'
+import { isArchiveId, isArchiveSearch, isArchiveRestore, isMessageRef, isAttachmentRef, type MailArchiveEntry, type MailArchivePage, type MessageContent } from '../shared/mail-archive.js'
 
 type CachedMessage = { id: string; path: string; validity: string; uid: number; raw_id: string | null; source_sha256?: string | null; data: Conversation & { replyTo?: string; references?: string[]; receivedAt?: string } }
 type Folder = { id: string; path: string }
@@ -21,6 +21,9 @@ const sourceHash = (value: Buffer) => createHash('sha256').update(value).digest(
 const emptyMailbox = { projects: [{ id: 'inbox', name: 'INBOX', color: 'blue', code: null }], contacts: [], conversations: [] }
 const stateSnapshot = "jsonb_build_object('id',s.id,'revision',s.revision,'unread',s.unread,'status',s.status,'projectId',s.project_id,'labelIds',s.label_ids,'assigneeId',s.assignee_id)"
 const slot = (path: string, validity: string, uid: number) => JSON.stringify([path, validity, uid])
+// IMAP/SMTP errors carry a code and the server's response text, never the credentials.
+const describeError = (error: unknown) => { const item = error as { code?: string; responseText?: string; message?: string } | undefined
+  return [item?.code, item?.responseText ?? item?.message].filter(Boolean).join(' · ').slice(0, 300) || 'Unknown error' }
 const folderName = (project: Project) => project.parentId || project.code === null ? project.name : `${project.code ?? project.id} - ${project.name}`
 
 export class MailStore extends ProjectStore {
@@ -30,6 +33,9 @@ export class MailStore extends ProjectStore {
   private syncError = false
   private delimiter = '/'
   private readonly limit = Math.max(1, Math.min(1000, Number(process.env.MAILBOX_SYNC_LIMIT) || 200))
+  // ponytail: in-memory ring buffer, lost on restart; the stdout copy keeps the history in container logs.
+  private logs: MailLogEntry[] = []
+  private logSeq = 0
 
   constructor(private accountId = process.env.MAILBOX_ID ?? 'support') {
     super(`imap:${accountId}`, emptyMailbox)
@@ -112,6 +118,36 @@ export class MailStore extends ProjectStore {
 
   async archiveSource(id: unknown) { return (await this.archivedMessage(id)).source }
 
+  // ponytail: the archived MIME is re-parsed on each open; cache parsed parts if large mail makes reading slow.
+  private async parsedMessage(id: unknown) {
+    if (!isMessageRef(id)) throw new BadRequestException('Invalid message ID.')
+    const { rows } = await this.pool.query<{ source: Buffer; sha256: string }>(
+      'SELECT source,sha256 FROM mail_archives WHERE mailbox_id=$1 AND message_id=$2 ORDER BY last_seen_at DESC LIMIT 1', [this.mailboxId, id])
+    if (!rows[0]) throw new NotFoundException('The complete message is not archived yet.')
+    if (sourceHash(rows[0].source) !== rows[0].sha256) throw new ServiceUnavailableException('Archive integrity check failed. The stored copy was preserved.')
+    return simpleParser(rows[0].source)
+  }
+
+  async messageContent(id: unknown): Promise<MessageContent> {
+    const parsed = await this.parsedMessage(id).catch(async (error) => {
+      if (!(error instanceof NotFoundException)) throw error
+      // Not archived yet (or sent before archiving): serve the cached text body.
+      const { rows } = await this.pool.query<{ body: string }>(`SELECT data->>'body' AS body FROM mail_messages WHERE mailbox_id=$1 AND id=$2
+        UNION ALL SELECT data->>'body' FROM mail_sends WHERE mailbox_id=$1 AND data->>'id'=$2 LIMIT 1`, [this.mailboxId, id])
+      if (!rows[0]) throw error
+      return { html: false, text: rows[0].body ?? '', attachments: [] }
+    })
+    return { html: typeof parsed.html === 'string' ? cleanIncomingHtml(parsed.html) : null, text: parsed.text ?? '',
+      attachments: parsed.attachments.flatMap((item, index) => item.related ? [] : [{ index, filename: item.filename || `attachment-${index + 1}`, contentType: item.contentType, size: item.size }]) }
+  }
+
+  async messageAttachment(input: unknown) {
+    if (!isAttachmentRef(input)) throw new BadRequestException('Invalid attachment.')
+    const item = (await this.parsedMessage(input.id)).attachments[input.index]
+    if (!item || item.related) throw new NotFoundException('Attachment not found.')
+    return { filename: item.filename || `attachment-${input.index + 1}`, contentType: item.contentType, content: item.content.toString('base64') }
+  }
+
   async restoreArchive(input: unknown, actor?: Member) {
     if (!isArchiveRestore(input)) throw new BadRequestException('Invalid archive restoration.')
     if (actor) await this.members(actor)
@@ -164,8 +200,8 @@ export class MailStore extends ProjectStore {
     return { rejectUnauthorized: true, minVersion: 'TLSv1.2' as const, ...(process.env.MAILBOX_CA_FILE ? { ca: readFileSync(process.env.MAILBOX_CA_FILE) } : {}) }
   }
 
-  private imap() {
-    const endpoint = this.account.imap
+  private imap(account = this.account) {
+    const endpoint = account.imap
     const client = new ImapFlow({ host: endpoint.host, port: endpoint.port, secure: endpoint.security === 'tls',
       ...(endpoint.security === 'starttls' ? { doSTARTTLS: true } : {}),
       auth: { user: endpoint.user, pass: endpoint.password }, tls: this.tls(), logger: false,
@@ -175,21 +211,86 @@ export class MailStore extends ProjectStore {
     return client
   }
 
-  private smtp() {
-    const endpoint = this.account.smtp
+  private smtp(account = this.account) {
+    const endpoint = account.smtp
     return nodemailer.createTransport({ host: endpoint.host, port: endpoint.port, secure: endpoint.security === 'tls',
       requireTLS: true, auth: { user: endpoint.user, pass: endpoint.password }, tls: this.tls(),
       connectionTimeout: 15_000, greetingTimeout: 15_000, socketTimeout: 30_000, logger: false, debug: false,
       disableFileAccess: true, disableUrlAccess: true })
   }
 
-  private async exclusive<T>(run: () => Promise<T>): Promise<T> {
+  private async adminOnly(actor?: Member) {
+    if (!await this.canAdmin(actor ?? { id: 'shared-operator', name: 'Shared operator', email: '' })) throw new ForbiddenException('Only administrators can manage the mail account.')
+  }
+
+  private log(level: MailLogEntry['level'], message: string, ...values: (string | number)[]) {
+    const entry = { seq: ++this.logSeq, at: new Date().toISOString(), level, message, values }
+    this.logs.push(entry)
+    if (this.logs.length > 1000) this.logs.shift()
+    console[level === 'error' ? 'error' : 'info'](`[postfold] ${level.toUpperCase()} ${message.replace(/\{(\d+)\}/g, (match, index) => String(values[Number(index)] ?? match))}`)
+  }
+
+  async readLogs(after: unknown, actor?: Member) {
+    await this.adminOnly(actor)
+    const from = Number(after) || 0
+    return { latest: this.logSeq, entries: this.logs.filter((entry) => entry.seq > from) }
+  }
+
+  async accountSettings(actor?: Member): Promise<MailAccountSettings> {
+    await this.adminOnly(actor)
+    const { imap: { password: _imap, ...imap }, smtp: { password: _smtp, ...smtp }, ...rest } = this.account
+    return { ...rest, imap, smtp }
+  }
+
+  // Changing the address means another mailbox: it is only allowed when the local cache is wiped, so two mailboxes never mix.
+  async updateAccount(input: unknown, actor?: Member): Promise<MailAccountSettings> {
+    await this.adminOnly(actor)
+    if (!isMailAccountUpdate(input)) throw new BadRequestException('Invalid mail account settings.')
+    const { reset, ...account } = input
+    if (account.email.toLowerCase() !== this.account.email.toLowerCase() && !reset) throw new BadRequestException('Changing the mailbox address requires starting from zero.')
+    const next: MailAccount = { ...account,
+      imap: { ...account.imap, password: account.imap.password || this.account.imap.password },
+      smtp: { ...account.smtp, password: account.smtp.password || this.account.smtp.password } }
+    const imap = this.imap(next)
+    try { await imap.connect() } catch { throw new BadRequestException('IMAP connection failed. Check the host, port, security and credentials.') }
+    finally { await imap.logout().catch(() => imap.close()) }
+    try { await this.smtp(next).verify() } catch { throw new BadRequestException('SMTP connection failed. Check the host, port, security and credentials.') }
+    // A plain settings change needs no lock: a running sync finishes on its open connection, the next one uses the new account.
+    if (!reset) { await saveAccount(this.pool, this.accountId, next); this.account = next; this.log('info', 'Mail account settings updated') }
+    // Wiping must not interleave with a sync writing rows, so it waits for the current cycle (initial imports can take minutes).
+    else await this.exclusive(async () => {
+      const client = await this.pool.connect()
+      try {
+        await client.query('BEGIN')
+        // Local data only: nothing is deleted on the mail server. Unconfirmed sends keep their duplicate guard.
+        const { rowCount } = await client.query("SELECT 1 FROM mail_sends WHERE mailbox_id=$1 AND status IN ('sending','uncertain')", [this.mailboxId])
+        if (rowCount) throw new ConflictException('A reply is still being sent or unconfirmed. Check Sent before starting from zero.')
+        for (const table of ['mail_messages', 'mail_folders', 'mail_archives', 'mail_sends', 'demo_conversation_state', 'postfold_activity'])
+          await client.query(`DELETE FROM ${table} WHERE mailbox_id=$1`, [this.mailboxId])
+        await client.query('UPDATE demo_project_settings SET revision=revision+1, settings=$2 WHERE mailbox_id=$1',
+          [this.mailboxId, { projects: emptyMailbox.projects, labels: [], order: emptyMailbox.projects.map((item) => item.id), sort: 'manual' }])
+        await saveAccount(client, this.accountId, next)
+        await client.query('COMMIT')
+      } catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error }
+      finally { client.release() }
+      this.account = next; this.lastSync = null; this.syncError = false
+      this.log('warn', 'Local data cleared; resynchronizing {0} from scratch', next.email)
+    }, 150_000)
+    void this.sync().catch(() => {})
+    return this.accountSettings(actor)
+  }
+
+  private async exclusive<T>(run: () => Promise<T>, waitMs = 0): Promise<T> {
     const lock = await this.pool.connect()
     let held = false
     try {
       // ponytail: one PostgreSQL session lock per mailbox; split sync/write locks if throughput requires it.
-      const { rows } = await lock.query('SELECT pg_try_advisory_lock(hashtext($1), hashtext($2)) AS held', ['postfold:mail', this.mailboxId])
-      held = rows[0].held
+      // Callers that may wait (settings changes) poll between sync cycles instead of failing immediately.
+      for (const deadline = Date.now() + waitMs; ; await new Promise((resolve) => setTimeout(resolve, 500))) {
+        const { rows } = await lock.query('SELECT pg_try_advisory_lock(hashtext($1), hashtext($2)) AS held', ['postfold:mail', this.mailboxId])
+        held = rows[0].held
+        if (held || Date.now() >= deadline) break
+      }
       if (!held) throw new ConflictException('Mailbox operation in progress; refresh before retrying.')
       return await run()
     } catch (error) {
@@ -210,7 +311,8 @@ export class MailStore extends ProjectStore {
     const imported = messages.rows.map((row) => row.data)
     const messageIds = new Set(imported.map((item) => item.messageId))
     const outgoing = sends.rows.filter((row) => row.status === 'sent' && !messageIds.has(row.data.messageId)).map((row) => row.data as Conversation)
-    const conversations = applyConversationStates([...imported, ...outgoing], conversationStates)
+    // Bodies load with the message content when opened; the list payload only needs previews.
+    const conversations = applyConversationStates([...imported, ...outgoing].map((item) => ({ ...item, body: '' })), conversationStates)
       .sort((a, b) => (Date.parse(b.sentAt ?? '') || 0) - (Date.parse(a.sentAt ?? '') || 0))
     const contacts = new Map<string, { id: string; name: string; email: string; company: string; phone: string }>()
     for (const message of conversations) {
@@ -232,8 +334,16 @@ export class MailStore extends ProjectStore {
   async sync() {
     try {
       await this.exclusive(async () => {
+        const started = Date.now()
+        this.log('info', 'Synchronization started')
         const client = this.imap()
-        try { await client.connect(); await this.importMailbox(client); this.lastSync = new Date().toISOString(); this.syncError = false }
+        try {
+          await client.connect()
+          const result = await this.importMailbox(client)
+          this.lastSync = new Date().toISOString(); this.syncError = false
+          this.log('info', result.complete ? 'Synchronization finished in {0} s: {1} new, {2} messages in {3} folders' : 'Synchronization step finished in {0} s: {1} new, {2} messages in {3} folders; import continues',
+            Math.round((Date.now() - started) / 100) / 10, result.imported, result.total, result.folders)
+        } catch (error) { this.log('error', 'Synchronization failed: {0}', describeError(error)); throw error }
         finally { await client.logout().catch(() => client.close()) }
       })
     } catch (error) { if (error instanceof ConflictException) return this.mailbox(); this.syncError = true; throw error }
@@ -289,6 +399,7 @@ export class MailStore extends ProjectStore {
     const liveSlots = new Set(indexedInventory.keys())
     const staged: CachedMessage[] = []
     let importPending = false
+    let imported = 0
     for (const { folder, id } of folders) {
       const items = inventory.filter((item) => item.path === folder.path)
       const uncached = items.filter((item) => !bySlot.get(slot(item.path, item.validity, item.message.uid))?.source_sha256 && (item.message.size ?? 0) <= MAX_MIME_BYTES)
@@ -349,6 +460,7 @@ export class MailStore extends ProjectStore {
         claimedArchiveIds.add(data.id)
         const row = { id: data.id, path: item.path, validity: item.validity, uid: item.message.uid, raw_id: rawId, data, source_sha256: sha }
         await this.archiveMessage(row, source, [...(item.message.flags ?? [])], new Date(item.message.internalDate || date), currentStates.get(data.id) ?? restoredStates.get(data.id))
+        imported++
         staged.push(row)
       }
     }
@@ -405,7 +517,7 @@ export class MailStore extends ProjectStore {
         WHERE mailbox_id=$1 AND EXISTS (SELECT 1 FROM mail_messages m WHERE m.mailbox_id=a.mailbox_id AND m.source_sha256=a.sha256)`, [this.mailboxId])
       await transaction.query('COMMIT')
     } catch (error) { await transaction.query('ROLLBACK'); throw error } finally { transaction.release() }
-    return { complete: !importPending }
+    return { complete: !importPending, imported, total: inventory.length, folders: listed.length }
   }
 
   override async updateConversations(input: unknown, actor?: Member) {
@@ -420,9 +532,9 @@ export class MailStore extends ProjectStore {
       if (targets.some((item, index) => item!.revision !== input.targets[index].revision)) throw new ConflictException({ message: 'Conversation changed; refresh before retrying.', states: targets })
       if ([...(input.addLabelIds ?? []), ...(input.removeLabelIds ?? [])].some((id) => !settings.labels?.some((label) => label.id === id))) throw new BadRequestException('Unknown label.')
       if (input.projectId && !settings.projects.some((item) => item.id === input.projectId)) throw new BadRequestException('Unknown destination folder.')
-      if (input.unread !== undefined || input.projectId !== undefined) await this.applyImapUpdate(input)
+      if (input.unread !== undefined || input.projectId !== undefined) await this.applyImapUpdate(input).catch((error) => { this.log('warn', 'IMAP update failed: {0}', describeError(error)); throw error })
       return super.updateConversations(input, actor)
-    })
+    }, 15_000) // Opening or filing a mail waits for a short sync cycle instead of failing.
   }
 
   private async applyImapUpdate(input: ConversationUpdate) {
@@ -457,6 +569,8 @@ export class MailStore extends ProjectStore {
           }
         } finally { lock.release() }
       }
+      if (destination.length) this.log('info', 'Moved {0} message(s) to {1}', messages.length, destination[0].path)
+      else this.log('info', input.unread ? 'Marked {0} message(s) as unread' : 'Marked {0} message(s) as read', messages.length)
     } finally { await client.logout().catch(() => client.close()) }
   }
 
@@ -488,6 +602,7 @@ export class MailStore extends ProjectStore {
             if (previous === path) continue
             if (previous) {
               await client.mailboxRename(previous, path)
+              this.log('info', 'Renamed folder {0} to {1}', previous, path)
               for (const [id, oldPath] of paths) if (oldPath === previous || oldPath.startsWith(previous + this.delimiter)) {
                 const renamed = path + oldPath.slice(previous.length)
                 await this.pool.query('UPDATE mail_folders SET path=$3 WHERE mailbox_id=$1 AND id=$2', [this.mailboxId, id, renamed])
@@ -496,6 +611,7 @@ export class MailStore extends ProjectStore {
               }
             } else {
               await client.mailboxCreate(path)
+              this.log('info', 'Created folder {0}', path)
               await this.pool.query('INSERT INTO mail_folders (mailbox_id,id,path) VALUES ($1,$2,$3)', [this.mailboxId, project.id, path])
               paths.set(project.id, path)
             }
@@ -558,7 +674,9 @@ export class MailStore extends ProjectStore {
       try {
         const delivered = await transport.sendMail({ envelope: { from: this.account.email, to: [message.replyTo] }, raw })
         if (!delivered.accepted?.length) throw new Error('No recipient accepted')
-      } catch {
+        this.log('info', 'Reply sent to {0}', message.replyTo)
+      } catch (error) {
+        this.log('error', 'Reply to {0} could not be confirmed: {1}', message.replyTo, describeError(error))
         await this.pool.query(`WITH delivery AS (UPDATE mail_sends SET status='uncertain' WHERE mailbox_id=$1 AND request_id=$2 RETURNING request_id)
           UPDATE postfold_activity SET data=jsonb_set(data,'{status}','"uncertain"') WHERE mailbox_id=$1 AND id IN (SELECT request_id FROM delivery)`, [this.mailboxId, input.requestId])
         throw new ConflictException('Delivery could not be confirmed. Do not resend; inspect Sent and the mail server. Your draft is preserved.')
@@ -574,7 +692,7 @@ export class MailStore extends ProjectStore {
       if (this.account.saveSent) {
         const client = this.imap()
         try { await client.connect(); sentCopy = !!await client.append(this.account.sentPath, raw, ['\\Seen'], date) }
-        catch { sentCopy = false }
+        catch (error) { sentCopy = false; this.log('warn', 'Sent copy could not be saved in {0}: {1}', this.account.sentPath, describeError(error)) }
         finally { await client.logout().catch(() => client.close()) }
       }
       await this.pool.query('UPDATE mail_sends SET sent_copy=$3 WHERE mailbox_id=$1 AND request_id=$2', [this.mailboxId, input.requestId, sentCopy])
