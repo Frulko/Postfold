@@ -180,6 +180,10 @@ b, time { font-variant-numeric: tabular-nums; }
 .list-header { position: relative; z-index: 3; flex-shrink: 0; padding-top: 16px; background: #fff; border-bottom: 1px solid var(--line); }
 .list-rows { flex: 1; min-height: 0; overflow-y: auto; }
 .list-more { height: 1px; }
+.sync-progress { display: grid; gap: 6px; padding: 10px 24px; border-bottom: 1px solid var(--line); background: #eff6ff; color: #1e3a8a; font-size: 12px; }
+.sync-progress-text { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; min-width: 0; }
+.sync-progress-step { min-width: 0; overflow: hidden; color: #3b5bab; text-overflow: ellipsis; white-space: nowrap; }
+.sync-progress progress { width: 100%; height: 6px; accent-color: #2563eb; }
 .list-rows:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .list-rows, .reading-pane, .contact-panel, .label-section nav { overscroll-behavior-y: contain; scrollbar-width: thin; scrollbar-color: #a1a1aa transparent; scrollbar-gutter: stable; }
 .list-heading { padding: 0 20px; }
@@ -420,6 +424,7 @@ textarea { width: 100%; border: 1px solid var(--line); border-radius: 7px; paddi
   .header-indicators { gap: 10px; }
   .presence-count { display: none; }
   .demo-banner { padding: 10px 18px; }
+  .sync-progress { padding: 10px 18px; }
   .content-grid { display: block; overflow-y: auto; overscroll-behavior-y: contain; }
   .conversation-list { height: clamp(420px, 75dvh, 520px); border-right: 0; border-bottom: 1px solid var(--line); }
   .list-header { padding-top: 16px; }

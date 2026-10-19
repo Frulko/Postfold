@@ -93,8 +93,8 @@ export class ProjectStore implements OnApplicationShutdown {
     } catch (error) { await client.query('ROLLBACK'); throw error } finally { client.release() }
   }
 
-  async readConversationStates(): Promise<ConversationState[]> {
-    const { rows } = await this.pool.query<ConversationState>(`SELECT ${stateColumns} FROM demo_conversation_state WHERE mailbox_id = $1 ORDER BY id`, [this.mailboxId])
+  async readConversationStates(ids?: string[]): Promise<ConversationState[]> {
+    const { rows } = await this.pool.query<ConversationState>(`SELECT ${stateColumns} FROM demo_conversation_state WHERE mailbox_id = $1 AND ($2::text[] IS NULL OR id = ANY($2::text[])) ORDER BY id`, [this.mailboxId, ids ?? null])
     return rows
   }
 

@@ -22,6 +22,7 @@
     "typecheck": "tsc --noEmit && tsc -p api/tsconfig.json --noEmit",
     "test": "pnpm db:up && pnpm build:api && node --test src/lib/mailbox.test.ts api/dist/api/app.test.js api/dist/api/mail-secrets.test.js",
     "test:mail": "pnpm db:up && pnpm build:api && node scripts/check-live-mail.mjs",
+    "test:scale": "pnpm db:up && pnpm build:api && node scripts/check-scale.mjs",
     "test:sso": "pnpm db:up && pnpm build && node scripts/check-keycloak.mjs",
     "mailbox:configure": "pnpm build:api && node api/dist/api/configure-mailbox.js",
     "test:drag": "node scripts/check-mail-drag.mjs",

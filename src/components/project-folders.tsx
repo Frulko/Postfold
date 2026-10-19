@@ -7,8 +7,8 @@ import { Icon } from './icon'
 const colorNames = { green: 'Vert', orange: 'Orange', blue: 'Bleu', purple: 'Violet', rose: 'Rose', slate: 'Gris' }
 export type FolderFailure = { message: string; revision: number }
 
-export function ProjectFolders({ mailbox, revision, currentId, sort, order, disabled, allowDelete = true, dropTarget, movingMail, onSelect, onSave, onSort, onReorder, onDelete, onMailOver, onMailLeave, onMailDrop }: {
-  mailbox: Mailbox; currentId: string | null; sort: ProjectSort; order: string[]; disabled: boolean
+export function ProjectFolders({ mailbox, counts, revision, currentId, sort, order, disabled, allowDelete = true, dropTarget, movingMail, onSelect, onSave, onSort, onReorder, onDelete, onMailOver, onMailLeave, onMailDrop }: {
+  mailbox: Mailbox; counts?: Record<string, number>; currentId: string | null; sort: ProjectSort; order: string[]; disabled: boolean
   revision: number
   allowDelete?: boolean
   dropTarget: string | null; movingMail: boolean
@@ -41,6 +41,11 @@ export function ProjectFolders({ mailbox, revision, currentId, sort, order, disa
   const keyboardHandle = useRef<HTMLButtonElement | null>(null)
   const manual = sortProjects(mailbox.projects, 'manual', order)
   const visible = projectTree(mailbox.projects, sort, order, collapsed, query)
+  // Folder badges include subfolders. Live mailboxes send per-folder totals; the demo counts its loaded conversations.
+  const totals = new Map<string, number>()
+  const parents = new Map(mailbox.projects.map((project) => [project.id, project.parentId ?? null]))
+  const direct = counts ? Object.entries(counts) : [...mailbox.conversations.reduce((tally, item) => tally.set(item.projectId, (tally.get(item.projectId) ?? 0) + 1), new Map<string, number>())]
+  for (const [folderId, count] of direct) for (let id: string | null = folderId, depth = 0; id && depth < 100; id = parents.get(id) ?? null, depth++) totals.set(id, (totals.get(id) ?? 0) + count)
   const siblings = manual.filter((item) => (item.parentId ?? null) === (input.parentId ?? null))
   const siblingCount = siblings.filter((item) => item.id !== editingId).length
   const canReorder = sort === 'manual' && !query.trim() && !disabled
@@ -80,7 +85,7 @@ export function ProjectFolders({ mailbox, revision, currentId, sort, order, disa
     <p className="folder-hint">{sort !== 'manual' ? t("Tri partagé avec l’équipe") : query.trim() ? t("Effacez la recherche pour réordonner") : t("Glisser la poignée pour réordonner")}</p>
     <nav className="project-nav" aria-label={t("Projets")}>
       {visible.map(({ project, depth }) => {
-        const count = mailbox.conversations.filter((item) => item.projectId === project.id || projectPath(mailbox.projects, item.projectId).startsWith(`${projectPath(mailbox.projects, project.id)} /`)).length
+        const count = totals.get(project.id) ?? 0
         const hasChildren = mailbox.projects.some((item) => item.parentId === project.id)
         const siblingRows = manual.filter((item) => (item.parentId ?? null) === (project.parentId ?? null))
         const index = siblingRows.findIndex((item) => item.id === project.id)

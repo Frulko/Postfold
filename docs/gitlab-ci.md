@@ -40,7 +40,7 @@ Les autres variables ont déjà leurs valeurs par défaut ; ne les ajouter que p
 | `KEYCLOAK_ADMIN_ROLE` | `support-admin` | Rôle du client pour administrer Postfold. |
 | `MAILBOX_ID` | `support` | Identifiant stable de la boîte partagée. |
 | `MAILBOX_KEY_ID` | `v1` | Version de la clé de chiffrement, à conserver avec les sauvegardes. |
-| `MAILBOX_SYNC_LIMIT` | `200` | Nouveaux messages importés par cycle, tous dossiers confondus, de 1 à 5000. |
+| `MAILBOX_SYNC_LIMIT` | `200` | Nouveaux messages importés par cycle, tous dossiers confondus, de 1 à 5000. Chaque cycle importe au plus une minute, et le suivant démarre aussitôt tant que l’import n’est pas fini : `1000` convient à une grosse boîte. |
 | `MAILBOX_MODE` | `imap` | Mettre temporairement `demo` pour le premier import décrit ci-dessous. |
 
 La stack impose `POSTFOLD_AUTH=keycloak` et `DEMO_MODE=false`. `DATABASE_URL`, les chemins des secrets et l'adresse interne de l'API sont déjà configurés.

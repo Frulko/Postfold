@@ -23,8 +23,8 @@ export function LabelPicker({ labels, conversations, disabled, onChange }: {
   </details>
 }
 
-export function LabelManager({ labels, conversations, revision, disabled, selectedId, onSelect, onSave }: {
-  labels: Label[]; conversations: Conversation[]; revision: number; disabled: boolean; selectedId: string | null
+export function LabelManager({ labels, conversations, counts, revision, disabled, selectedId, onSelect, onSave }: {
+  labels: Label[]; conversations: Conversation[]; counts?: Record<string, number>; revision: number; disabled: boolean; selectedId: string | null
   onSelect: (id: string | null) => void; onSave: (labels: Label[], revision: number) => Promise<FolderFailure | null>
 }) {
   const { t } = useI18n()
@@ -58,7 +58,7 @@ export function LabelManager({ labels, conversations, revision, disabled, select
     {!!labels.length && <div className="folder-search"><Icon name="search" /><input aria-label={t("Rechercher un label")} placeholder={t("Rechercher un label…")} value={query} onChange={(event) => setQuery(event.target.value)} /></div>}
     {selectedId ? <button className="label-reset" onClick={() => onSelect(null)}>{t("Tous les labels")}</button> : null}
     <nav aria-label={t("Labels")}>{labels.filter((item) => item.name.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase('fr').includes(needle)).map((label) => <div className="label-row" key={label.id}>
-      <button className={selectedId === label.id ? 'label-filter active' : 'label-filter'} aria-pressed={selectedId === label.id} onClick={() => onSelect(selectedId === label.id ? null : label.id)}><span className="project-dot" style={{ backgroundColor: projectColor(label.color) }} /><span>{label.name}</span><small>{conversations.filter((item) => item.labelIds?.includes(label.id)).length}</small></button>
+      <button className={selectedId === label.id ? 'label-filter active' : 'label-filter'} aria-pressed={selectedId === label.id} onClick={() => onSelect(selectedId === label.id ? null : label.id)}><span className="project-dot" style={{ backgroundColor: projectColor(label.color) }} /><span>{label.name}</span><small>{counts ? counts[label.id] ?? 0 : conversations.filter((item) => item.labelIds?.includes(label.id)).length}</small></button>
       <button className="icon-button" aria-label={t("Modifier le label {0}", label.name)} disabled={disabled} onClick={() => open(label)}><Icon name="edit" /></button>
     </div>)}</nav>
     {!!labels.length && !labels.some((item) => item.name.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase('fr').includes(needle)) ? <p className="folder-hint" role="status">{t("Aucun label trouvé.")}</p> : null}

@@ -25,7 +25,7 @@ export function MailLogs({ connected }: { connected: boolean }) {
         // The API restarted: its counter went back, so the history starts over.
         if (page.latest < cursor.current) { cursor.current = 0; setEntries([]); return }
         cursor.current = page.latest
-        if (page.entries.length) setEntries((current) => [...current, ...page.entries].slice(-1000))
+        if (page.entries.length) setEntries((current) => [...current, ...page.entries].slice(-2000))
         setState('ready')
       } catch { if (active) setState('failed') }
     }

@@ -107,8 +107,9 @@ class AuthController {
 @UseGuards(MailboxGuard)
 class MailboxController {
   constructor(@Inject(MailStore) private readonly mailbox: MailStore) {}
-  @Get() async read(@Req() request: AuthRequest) { const [mailbox, members] = await Promise.all([this.mailbox.mailbox(), this.mailbox.members(request.viewer)]); return { ...mailbox, members, currentMemberId: request.viewer?.id, ...(request.viewer ? { viewer: request.viewer } : {}) } }
-  @Post('sync') async sync(@Req() request: AuthRequest) { const [mailbox, members] = await Promise.all([this.mailbox.sync(), this.mailbox.members(request.viewer)]); return { ...mailbox, members, currentMemberId: request.viewer?.id, ...(request.viewer ? { viewer: request.viewer } : {}) } }
+  @Get() async read(@Req() request: AuthRequest) { const [mailbox, members] = await Promise.all([this.mailbox.mailbox({}), this.mailbox.members(request.viewer)]); return { ...mailbox, members, currentMemberId: request.viewer?.id, ...(request.viewer ? { viewer: request.viewer } : {}) } }
+  // Starts a cycle in the background: large imports report through progress instead of holding the request open.
+  @Post('sync') @HttpCode(200) async sync(@Body() query: unknown, @Req() request: AuthRequest) { this.mailbox.requestSync('manual'); const [mailbox, members] = await Promise.all([this.mailbox.mailbox(query ?? {}), this.mailbox.members(request.viewer)]); return { ...mailbox, members, currentMemberId: request.viewer?.id, ...(request.viewer ? { viewer: request.viewer } : {}) } }
   @Put('projects') projects(@Body() input: unknown) { return this.mailbox.update(input) }
   @Patch('conversations/state') conversations(@Body() input: unknown, @Req() request: AuthRequest) { return this.mailbox.updateConversations(input, request.viewer) }
   @Post('conversations/activity') @HttpCode(200) activity(@Body() ids: unknown) { return this.mailbox.activity(ids) }
@@ -124,6 +125,9 @@ class MailboxController {
       response.send(image.body)
     } catch { response.status(404).end() }
   }
+  @Post('list') @HttpCode(200) async list(@Body() query: unknown, @Req() request: AuthRequest) { const [mailbox, members] = await Promise.all([this.mailbox.mailbox(query), this.mailbox.members(request.viewer)]); return { ...mailbox, members, currentMemberId: request.viewer?.id, ...(request.viewer ? { viewer: request.viewer } : {}) } }
+  @Post('contacts') @HttpCode(200) contacts(@Body() query: unknown) { return this.mailbox.contacts(query) }
+  @Get('progress') progress() { return this.mailbox.syncProgress() }
   @Get('logs') logs(@Query('after') after: string, @Req() request: AuthRequest) { return this.mailbox.readLogs(after, request.viewer) }
   @Put('account') updateAccount(@Body() input: unknown, @Req() request: AuthRequest) { return this.mailbox.updateAccount(input, request.viewer) }
   @Post('archives/search') @HttpCode(200) archives(@Body() input: unknown) { return this.mailbox.archives(input) }

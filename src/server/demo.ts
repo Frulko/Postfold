@@ -1,6 +1,6 @@
 import { isAuthoringChange } from '../../shared/authoring'
 import { createServerFn } from '@tanstack/react-start'
-import type { Activity, ConversationState, DemoMailbox, MailLogEntry, ProjectSettings } from '../../shared/mailbox'
+import { isMailboxQuery, type Activity, type Contact, type ConversationState, type DemoMailbox, type MailLogEntry, type ProjectSettings, type SyncProgress } from '../../shared/mailbox'
 import { isProjectSettings } from '../../shared/projects'
 import { isActivityIds, isConversationUpdate } from '../../shared/conversation-state'
 import { getRequestHeader } from '@tanstack/react-start/server'
@@ -68,12 +68,35 @@ export const saveProjectSettings = createServerFn({ method: 'POST' })
     throw new Error('L’enregistrement partagé est indisponible. Votre saisie est conservée.')
   })
 
-export const syncMailbox = createServerFn({ method: 'POST' }).handler(async (): Promise<DemoMailbox> => {
-  if (process.env.MAILBOX_MODE !== 'imap') return getDemoMailbox()
-  const response = await fetch(apiPath('/sync'), { method: 'POST', headers: apiHeaders(), signal: AbortSignal.timeout(120_000) })
-  if (!response.ok) throw new Error('Mailbox synchronization failed; cached messages were preserved.')
-  return response.json()
-})
+// A window of the live mailbox for the current filters; the demo mailbox is small and always complete.
+export const listMailbox = createServerFn({ method: 'POST' })
+  .validator((input: unknown) => { if (!isMailboxQuery(input)) throw new Error('Invalid mailbox query.'); return input })
+  .handler(async ({ data }): Promise<DemoMailbox> => {
+    if (process.env.MAILBOX_MODE !== 'imap') return getDemoMailbox()
+    const response = await fetch(apiPath('/list'), { method: 'POST', headers: apiHeaders(), body: JSON.stringify(data), signal: AbortSignal.timeout(30_000) })
+    if (!response.ok) throw new Error('L’API de la boîte mail est indisponible.')
+    return response.json()
+  })
+
+// Starts a background synchronization and returns the current window; progress reports the import itself.
+export const syncMailbox = createServerFn({ method: 'POST' })
+  .validator((input: unknown) => { if (input !== undefined && !isMailboxQuery(input)) throw new Error('Invalid mailbox query.'); return input ?? {} })
+  .handler(async ({ data }): Promise<DemoMailbox> => {
+    if (process.env.MAILBOX_MODE !== 'imap') return getDemoMailbox()
+    const response = await fetch(apiPath('/sync'), { method: 'POST', headers: apiHeaders(), body: JSON.stringify(data), signal: AbortSignal.timeout(30_000) })
+    if (!response.ok) throw new Error('Mailbox synchronization failed; cached messages were preserved.')
+    return response.json()
+  })
+
+// Null in the demo, whose address book is complete in the mailbox payload.
+export const searchContacts = createServerFn({ method: 'POST' })
+  .validator((input: unknown) => { if (typeof input !== 'string' || input.length > 200) throw new Error('Invalid contact search.'); return input })
+  .handler(async ({ data }): Promise<Contact[] | null> => {
+    if (process.env.MAILBOX_MODE !== 'imap') return null
+    const response = await fetch(apiPath('/contacts'), { method: 'POST', headers: apiHeaders(), body: JSON.stringify({ query: data }), signal: AbortSignal.timeout(30_000) })
+    if (!response.ok) throw new Error('Contacts unavailable.')
+    return response.json()
+  })
 
 export const sendReply = createServerFn({ method: 'POST' })
   .validator((input: unknown) => { if (!isReplyRequest(input)) throw new Error('Invalid reply.'); return input })
@@ -168,6 +191,13 @@ export const saveMailAccount = createServerFn({ method: 'POST' })
     if ([400, 403, 409].includes(response.status)) return { ok: false, error: (await response.json()).message }
     return { ok: false, error: 'Mail account settings could not be saved.' }
   })
+
+export const getSyncProgress = createServerFn({ method: 'GET' }).handler(async (): Promise<SyncProgress | null> => {
+  if (process.env.MAILBOX_MODE !== 'imap') return null
+  const response = await fetch(apiPath('/progress'), { headers: apiHeaders(), signal: AbortSignal.timeout(15_000) })
+  if (!response.ok) throw new Error('Synchronization progress unavailable.')
+  return response.json()
+})
 
 export const getMailLogs = createServerFn({ method: 'POST' })
   .validator((input: unknown) => { if (!Number.isSafeInteger(input) || (input as number) < 0) throw new Error('Invalid log cursor.'); return input as number })
