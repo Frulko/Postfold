@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { filterConversations, filterProjects, highlightParts, linkParts, moveConversations, splitQuoted, suggestProjects, updateSelection, type Mailbox } from './mailbox.ts'
+import { filterConversations, filterProjects, formatMailTime, highlightParts, linkParts, moveConversations, splitQuoted, suggestProjects, updateSelection, type Mailbox } from './mailbox.ts'
 import { parseSearch, typoBudget, typoDistance } from '../../shared/search.ts'
 import { isProjectSettings, positionProject, prepareProject, sortProjects } from '../../shared/projects.ts'
 import { applyConversationStates, isConversationUpdate, mergeConversationStates } from '../../shared/conversation-state.ts'
@@ -234,4 +234,16 @@ test('typo tolerance: transpositions count once, numbers and short words stay ex
   assert.equal(typoDistance('contat', 'contrat', 1), 1, 'A missing letter is one typo')
   assert.equal(typoDistance('facture', 'devis', 1), 2, 'Distances beyond the limit stop early')
   assert.deepEqual(['devis', 'factures', 'reglement', '1999', 'ab12c'].map(typoBudget), [1, 1, 2, 0, 0])
+})
+
+test('mail dates always show the time, with the day when it is not today', () => {
+  const now = new Date(2026, 9, 19, 21, 30)
+  const at = (...parts: [number, number, number, number, number]) => new Date(...parts).toISOString()
+  assert.equal(formatMailTime(at(2026, 9, 19, 9, 5), 'fr', now), '09:05')
+  assert.equal(formatMailTime(at(2026, 9, 18, 23, 59), 'fr', now), 'Hier 23:59')
+  assert.equal(formatMailTime(at(2026, 9, 18, 23, 59), 'en', now), 'Yesterday 23:59')
+  assert.equal(formatMailTime(at(2026, 9, 15, 14, 2), 'fr', now), 'jeu. 14:02')
+  assert.equal(formatMailTime(at(2026, 9, 8, 10, 0), 'en', now), '8 Oct 10:00')
+  assert.equal(formatMailTime(at(2025, 11, 31, 8, 45), 'fr', now), '31 déc. 2025 08:45')
+  assert.equal(formatMailTime(undefined, 'fr', now), null)
 })

@@ -107,3 +107,23 @@ export function highlightParts(text: string, terms: string[]): { text: string; m
   }
   return parts
 }
+
+const intlLocale = (locale: string) => locale === 'en' ? 'en-GB' : 'fr-FR'
+// List and reader dates in the reader's language and time zone: today shows the time, yesterday "Hier 09:12",
+// this week the weekday, older mail the day and month (and year when it differs). The time is always shown.
+export function formatMailTime(sentAt: string | undefined, locale: string, now = new Date()) {
+  const date = new Date(sentAt ?? '')
+  if (Number.isNaN(date.getTime())) return null
+  const lang = intlLocale(locale)
+  const time = new Intl.DateTimeFormat(lang, { hour: '2-digit', minute: '2-digit' }).format(date)
+  const midnight = (value: Date) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime()
+  const days = Math.round((midnight(now) - midnight(date)) / 86_400_000)
+  if (days === 0) return time
+  if (days === 1) { const word = new Intl.RelativeTimeFormat(lang, { numeric: 'auto' }).format(-1, 'day'); return `${word[0].toLocaleUpperCase(lang)}${word.slice(1)} ${time}` }
+  const day = days > 1 && days < 7 ? { weekday: 'short' as const } : { day: 'numeric' as const, month: 'short' as const, ...(date.getFullYear() !== now.getFullYear() ? { year: 'numeric' as const } : {}) }
+  return `${new Intl.DateTimeFormat(lang, day).format(date)} ${time}`
+}
+export const fullMailTime = (sentAt: string | undefined, locale: string) => {
+  const date = new Date(sentAt ?? '')
+  return Number.isNaN(date.getTime()) ? undefined : new Intl.DateTimeFormat(intlLocale(locale), { dateStyle: 'full', timeStyle: 'short' }).format(date)
+}
