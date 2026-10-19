@@ -665,6 +665,8 @@ textarea { width: 100%; border: 1px solid var(--line); border-radius: 7px; paddi
 .list-heading .eyebrow { display: none; }
 .list-options label > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .list-options select { min-height: 40px; }
+.search-help { margin: -4px 20px 10px; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
+.thread-row mark { padding: 0 1px; border-radius: 2px; background: #fef08a; color: inherit; }
 .member-filter { grid-column: 1 / -1; display: grid; min-width: 0; margin: 0; }
 .member-filter select { min-width: 0; width: 100%; padding: 5px 6px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); font-size: 11px; }
 .reading-context { position: sticky; top: 0; z-index: 4; display: flex; align-items: center; gap: 6px; min-height: 56px; padding: 6px 0; background: #fff; border-bottom: 1px solid var(--line); }

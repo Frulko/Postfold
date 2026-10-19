@@ -1,6 +1,7 @@
 import type { Contact, Conversation, Mailbox, Project } from '../../shared/mailbox'
 export type { Project, Contact, Conversation, Mailbox } from '../../shared/mailbox'
 import { projectPath } from '../../shared/projects.ts'
+import { fold } from '../../shared/search.ts'
 
 const searchable = (value: string) => value.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase('fr')
 
@@ -60,7 +61,8 @@ export function threadContacts(mailbox: Mailbox, messages: Conversation[]) {
   return mailbox.contacts.filter((person) => ids.has(person.id) || emails.has(person.email.toLowerCase()))
 }
 
-export function mailboxRows(messages: Conversation[], mode: 'messages' | 'threads', order: MailOrder = 'newest') {
+// `relevance` keeps the API's ranking: rows follow the order of their best message.
+export function mailboxRows(messages: Conversation[], mode: 'messages' | 'threads', order: MailOrder | 'relevance' = 'newest') {
   const groups = new Map<string, Conversation[]>()
   for (const message of messages) {
     const key = mode === 'threads' ? threadKey(message) : message.id
@@ -72,9 +74,9 @@ export function mailboxRows(messages: Conversation[], mode: 'messages' | 'thread
     const ordered = [...items].sort((a, b) => (Date.parse(a.sentAt ?? '') || 0) - (Date.parse(b.sentAt ?? '') || 0))
     const first = ordered.find((item) => item.id === key) ?? ordered[0]
     const latest = ordered.at(-1)!
-    return { ...first, time: latest.time, preview: latest.preview, unread: items.some((item) => item.unread),
+    return { ...first, time: latest.time, preview: latest.preview, snippet: items.find((item) => item.snippet)?.snippet, unread: items.some((item) => item.unread),
       labelIds: [...new Set(items.flatMap((item) => item.labelIds ?? []))], messageIds: ordered.map((item) => item.id), latestAt: latest.sentAt ?? '' }
-  }).sort((a, b) => ((Date.parse(a.latestAt) || 0) - (Date.parse(b.latestAt) || 0)) * (order === 'oldest' ? 1 : -1))
+  }).sort((a, b) => order === 'relevance' ? 0 : ((Date.parse(a.latestAt) || 0) - (Date.parse(b.latestAt) || 0)) * (order === 'oldest' ? 1 : -1))
 }
 
 const attribution = (line: string) => /^(on|le)\s.{0,250}(wrote|a\s+écrit)\s*:\s*$/i.test(line)
@@ -89,3 +91,19 @@ export function splitQuoted(text: string): [string, string] {
 const linkPattern = /(https?:\/\/[^\s<>"]+[^\s<>".,;:!?)\]'»]|[\w.+-]+@[\w-]+(?:\.[\w-]+)+)/
 export const linkParts = (text: string) => text.split(linkPattern).map((part, index) =>
   index % 2 ? { text: part, href: part.includes('://') ? part : `mailto:${part}` } : { text: part })
+
+// Splits text into plain and highlighted parts for the searched words, ignoring case and accents.
+export function highlightParts(text: string, terms: string[]): { text: string; mark?: boolean }[] {
+  const folded = fold(text)
+  if (!terms.length || folded.length !== text.length) return [{ text }]
+  const marks = new Array<boolean>(text.length).fill(false)
+  for (const term of terms) for (let index = folded.indexOf(term); term && index !== -1; index = folded.indexOf(term, index + term.length)) marks.fill(true, index, index + term.length)
+  const parts: { text: string; mark?: boolean }[] = []
+  for (let index = 0; index < text.length;) {
+    let end = index
+    while (end < text.length && marks[end] === marks[index]) end++
+    parts.push(marks[index] ? { text: text.slice(index, end), mark: true } : { text: text.slice(index, end) })
+    index = end
+  }
+  return parts
+}

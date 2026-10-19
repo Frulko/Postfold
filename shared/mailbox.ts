@@ -21,6 +21,8 @@ export type Conversation = {
   messageId?: string
   outgoing?: boolean
   imapReady?: boolean
+  // Plain-text excerpt around a search match; rendered as text, never as HTML.
+  snippet?: string
 }
 
 export type Mailbox = { projects: Project[]; contacts: Contact[]; conversations: Conversation[]; labels?: Label[] }
@@ -40,7 +42,7 @@ export type ConversationUpdate = ConversationPatch & { targets: { id: string; re
 // Live mailboxes are read in windows: the list filters, sorts and pages in PostgreSQL; `include` keeps the open thread loaded.
 // `memberId` keeps conversations assigned to a colleague or that this colleague answered or changed.
 export type MailboxQuery = { projectId?: string | null; status?: 'all' | 'unread' | 'open' | 'waiting' | 'closed'; labelId?: string | null; memberId?: string | null; query?: string
-  threads?: boolean; order?: 'newest' | 'oldest'; cursor?: string | null; limit?: number; include?: string[] }
+  threads?: boolean; order?: 'newest' | 'oldest' | 'relevance'; cursor?: string | null; limit?: number; include?: string[] }
 export function isMailboxQuery(value: unknown): value is MailboxQuery {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const item = value as MailboxQuery
@@ -49,12 +51,13 @@ export function isMailboxQuery(value: unknown): value is MailboxQuery {
     (item.projectId == null || id(item.projectId)) && (item.labelId == null || id(item.labelId)) && (item.memberId == null || id(item.memberId)) &&
     (item.status === undefined || ['all', 'unread', 'open', 'waiting', 'closed'].includes(item.status)) &&
     (item.query === undefined || (typeof item.query === 'string' && item.query.length <= 200)) &&
-    (item.threads === undefined || typeof item.threads === 'boolean') && (item.order === undefined || item.order === 'newest' || item.order === 'oldest') &&
+    (item.threads === undefined || typeof item.threads === 'boolean') && (item.order === undefined || ['newest', 'oldest', 'relevance'].includes(item.order)) &&
     (item.cursor == null || (typeof item.cursor === 'string' && item.cursor.length <= 200)) &&
     (item.limit === undefined || (Number.isInteger(item.limit) && item.limit >= 1 && item.limit <= 1000)) &&
     (item.include === undefined || (Array.isArray(item.include) && item.include.length <= 50 && item.include.every(id)))
 }
-export type MailboxPage = { total: number; nextCursor: string | null }
+// `corrections` lists the spellings a search also matched (typos), so the browser can highlight them.
+export type MailboxPage = { total: number; nextCursor: string | null; corrections?: string[] }
 export type MailboxCounts = { messages: number; threads: number; labels: Record<string, number>; folders: Record<string, number> }
 
 export type DemoMailbox = Mailbox & { preferences?: import('./preferences.js').Preferences | null; page?: MailboxPage; counts?: MailboxCounts; viewer?: import('./auth.js').Viewer; members?: Member[]; currentMemberId?: string; projectSettings: Omit<ProjectSettings, 'projects'>; conversationStates: ConversationState[]; connection?: { mode: 'imap'; email: string; lastSync: string | null; error: boolean; maxMessagesPerSync: number }; deliveries?: { targetId: string; status: 'sending' | 'sent' | 'uncertain'; sentCopy: boolean }[] }

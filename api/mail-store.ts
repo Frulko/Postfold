@@ -10,6 +10,7 @@ import { loadAccount, saveAccount } from './mail-secrets.js'
 import { isMailAccountUpdate, isMailAddress, isReplyRequest, type MailAccount, type MailAccountSettings } from '../shared/mail-account.js'
 import { isConversationUpdate, applyConversationStates } from '../shared/conversation-state.js'
 import { isProjectSettings, projectPath } from '../shared/projects.js'
+import { fold, parseSearch, typoBudget, typoDistance } from '../shared/search.js'
 import { isMailboxQuery, type Contact, type Conversation, type ConversationState, type ConversationUpdate, type DemoMailbox, type MailboxCounts, type MailboxQuery, type MailLogEntry, type Member, type Project, type SyncProgress } from '../shared/mailbox.js'
 import { isArchiveId, isArchiveSearch, isArchiveRestore, isMessageRef, isAttachmentRef, type MailArchiveEntry, type MailArchivePage, type MessageContent } from '../shared/mail-archive.js'
 
@@ -28,6 +29,11 @@ const folderStatus = { messages: true, uidNext: true, uidValidity: true, unseen:
 const cycleStarts = { scheduled: 'Synchronization started', manual: 'Synchronization started on request', resume: 'Synchronization resumed to continue the import',
   startup: 'Synchronization started after startup', settings: 'Synchronization started after a settings change' }
 const LIST_PAGE = 200 // Messages per list window.
+const MAX_SEARCH_TERMS = 12 // Words and operators per search, to bound query cost.
+const SEARCH_TIMEOUT_MS = 8000
+const ATTACHMENT_INDEX_MS = 20_000 // Cycle time spent indexing attachment names of older messages.
+const TYPO_VARIANTS = 20 // Corrected spellings tried per word.
+const SEARCH_BODY_CHARS = 8000 // Body characters indexed per message; long newsletters stay searchable by their beginning.
 // A reply or a change of status, folder, labels or assignee counts as handling; opening a mail only marks it read.
 const handledActivity = `kind = 'reply' OR ${['status', 'projectId', 'labelIds', 'assigneeId'].map((key) => `data->'before'->'${key}' IS DISTINCT FROM data->'after'->'${key}'`).join(' OR ')}`
 // Diacritic-insensitive search like the browser filter; PostgreSQL extensions such as unaccent are not required.
@@ -82,6 +88,7 @@ export class MailStore extends ProjectStore {
   private inventoryCache = new Map<string, { key: string; at: number; validity: string; messages: FetchMessageObject[] }>()
   private listing: { at: number; listed: ListResponse[] } | null = null
   private syncing = false
+  private fuzzy = false
   private waiting = 0
   private progress: SyncProgress = { state: 'idle', startedAt: null, folder: null, folders: { done: 0, total: 0 }, batch: { done: 0, total: 0 }, stored: 0, total: 0, rate: null, lastCycle: null, error: null }
 
@@ -121,6 +128,7 @@ export class MailStore extends ProjectStore {
     // Ordered windows of the list and thread lookups (assignment inheritance, newest reply, whole threads).
     await this.pool.query("CREATE INDEX IF NOT EXISTS mail_messages_sent ON mail_messages (mailbox_id,(data->>'sentAt'),id)")
     await this.pool.query("CREATE INDEX IF NOT EXISTS mail_messages_thread ON mail_messages (mailbox_id,(data->>'threadId'))")
+    await this.initSearch()
     // ponytail: bounded MIME blobs stay in PostgreSQL; move blobs to object storage if archive size dominates backups.
     await this.pool.query(`CREATE TABLE IF NOT EXISTS mail_archives (
       mailbox_id text NOT NULL REFERENCES demo_project_settings(mailbox_id) ON DELETE CASCADE,
@@ -323,7 +331,7 @@ export class MailStore extends ProjectStore {
         // Local data only: nothing is deleted on the mail server. Unconfirmed sends keep their duplicate guard.
         const { rowCount } = await client.query("SELECT 1 FROM mail_sends WHERE mailbox_id=$1 AND status IN ('sending','uncertain')", [this.mailboxId])
         if (rowCount) throw new ConflictException('A reply is still being sent or unconfirmed. Check Sent before starting from zero.')
-        for (const table of ['mail_messages', 'mail_folders', 'mail_archives', 'mail_sends', 'demo_conversation_state', 'postfold_activity'])
+        for (const table of ['mail_messages', 'mail_folders', 'mail_archives', 'mail_sends', 'demo_conversation_state', 'postfold_activity', 'mail_search_words'])
           await client.query(`DELETE FROM ${table} WHERE mailbox_id=$1`, [this.mailboxId])
         await client.query('UPDATE demo_project_settings SET revision=revision+1, settings=$2 WHERE mailbox_id=$1',
           [this.mailboxId, { projects: emptyMailbox.projects, labels: [], order: emptyMailbox.projects.map((item) => item.id), sort: 'manual' }])
@@ -381,37 +389,77 @@ export class MailStore extends ProjectStore {
     const conversations = applyConversationStates([...page.messages, ...pending].map((item) => ({ ...item, body: '' })), conversationStates)
     const { projects, ...projectSettings } = settings
     return { projects, projectSettings, labels: settings.labels ?? [], conversations, contacts: contactsOf(conversations), conversationStates,
-      page: { total: page.total, nextCursor: page.nextCursor }, counts: { ...counts, messages: counts.messages + pending.length, threads: counts.threads + pending.length },
+      page: { total: page.total, nextCursor: page.nextCursor, corrections: page.corrections }, counts: { ...counts, messages: counts.messages + pending.length, threads: counts.threads + pending.length },
       connection: { mode: 'imap', email: this.account.email, lastSync: this.lastSync, error: this.syncError, maxMessagesPerSync: this.limit },
       deliveries: sends.rows.map((row) => ({ targetId: row.target_id, status: row.status, sentCopy: row.sent_copy })) }
   }
 
   private async page(query: MailboxQuery) {
-    const projects = (await this.read()).projects
+    const { projects, labels = [] } = await this.read()
     const limit = query.limit ?? LIST_PAGE
-    const oldest = query.order === 'oldest'
-    const folderIds = query.projectId ? descendantIds(projects, query.projectId) : null
-    const needle = searchable(query.query?.trim() ?? '')
-    // Folder names and codes match like in the browser: every message of a matching folder is a match.
-    const pathIds = needle ? projects.filter((project) => searchable(`${project.id} ${projectPath(projects, project.id)}`).includes(needle)).map((project) => project.id) : []
-    const [cursorAt, cursorId] = query.cursor ? JSON.parse(Buffer.from(query.cursor, 'base64url').toString()) as [string, string] : [null, null]
-    const filters = `m.mailbox_id = $1
-      AND ($2::text[] IS NULL OR COALESCE(s.project_id, m.data->>'projectId') = ANY($2::text[]))
-      AND ($3 = 'all' OR ($3 = 'unread' AND COALESCE(s.unread, (m.data->>'unread')::boolean)) OR COALESCE(s.status, m.data->>'status') = $3)
-      AND ($4::text IS NULL OR $4 = ANY(COALESCE(s.label_ids, ARRAY[]::text[])))
-      AND ($5 = '' OR strpos(${searchText}, $5) > 0 OR COALESCE(s.project_id, m.data->>'projectId') = ANY($6::text[]))
-      AND ($7::text IS NULL OR s.assignee_id = $7 OR m.id IN (SELECT conversation_id FROM postfold_activity WHERE mailbox_id = $1 AND actor->>'id' = $7 AND (${handledActivity})))`
-    const values = [this.mailboxId, folderIds, query.status ?? 'all', query.labelId ?? null, needle, pathIds, query.memberId ?? null]
+    const search = parseSearch(query.query?.trim() ?? '')
+    const words = [...search.terms, ...search.phrases]
+    if (words.length + search.excluded.length + search.from.length + search.to.length + search.subject.length > MAX_SEARCH_TERMS) throw new BadRequestException('Search has too many terms.')
+    const order = query.order === 'relevance' && words.length ? 'relevance' : query.order === 'oldest' ? 'oldest' : 'newest'
+    let cursor: unknown = null
+    try { cursor = query.cursor ? JSON.parse(Buffer.from(query.cursor, 'base64url').toString()) : null } catch { /* Checked below. */ }
+    if (query.cursor && !(order === 'relevance' ? Number.isSafeInteger(cursor) && (cursor as number) >= 0 : Array.isArray(cursor) && cursor.length === 2 && cursor.every((item) => typeof item === 'string'))) throw new BadRequestException('Invalid list cursor.')
+    // Every value is a bound parameter; LIKE wildcards in user input are escaped.
+    const values: unknown[] = [this.mailboxId]
+    const bind = (value: unknown) => { values.push(value); return `$${values.length}` }
+    const like = (value: string) => bind(`%${value.replace(/[\\%_]/g, (char) => `\\${char}`)}%`)
+    const state = (column: string, fallback: string) => `COALESCE(s.${column}, ${fallback})`
+    const project = state('project_id', "m.data->>'projectId'")
+    const matchingIds = <T extends { id: string }>(items: T[], text: (item: T) => string, needles: string[]) => items.filter((item) => needles.every((needle) => fold(text(item)).includes(needle))).map((item) => item.id)
+    const filters = ['m.mailbox_id = $1']
+    if (query.projectId) filters.push(`${project} = ANY(${bind(descendantIds(projects, query.projectId))}::text[])`)
+    const status = query.status ?? 'all'
+    if (status === 'unread') filters.push(`${state('unread', "(m.data->>'unread')::boolean")}`)
+    else if (status !== 'all') filters.push(`${state('status', "m.data->>'status'")} = ${bind(status)}`)
+    if (query.labelId) filters.push(`${bind(query.labelId)} = ANY(COALESCE(s.label_ids, ARRAY[]::text[]))`)
+    if (query.memberId) { const member = bind(query.memberId); filters.push(`(s.assignee_id = ${member} OR m.id IN (SELECT conversation_id FROM postfold_activity WHERE mailbox_id = $1 AND actor->>'id' = ${member} AND (${handledActivity})))`) }
+    // Free words match as substrings (partial words) or through close words of this mailbox's vocabulary (typos).
+    // A folder whose path holds every word matches too.
+    const variants = await this.typoVariants(words)
+    const text = words.map((word) => `(${[word, ...variants.get(word) ?? []].map((variant) => `m.search LIKE ${like(variant)}`).join(' OR ')})`)
+    const pathIds = words.length ? matchingIds(projects, (item) => `${item.id} ${projectPath(projects, item.id)}`, words) : []
+    if (text.length) filters.push(`((${text.join(' AND ')})${pathIds.length ? ` OR ${project} = ANY(${bind(pathIds)}::text[])` : ''})`)
+    for (const word of search.excluded) filters.push(`COALESCE(m.search, '') NOT LIKE ${like(word)}`)
+    for (const value of search.from) filters.push(`postfold_fold(concat_ws(' ', m.data->'sender'->>'name', m.data->'sender'->>'email')) LIKE ${like(value)}`)
+    for (const value of search.to) filters.push(`postfold_fold(concat_ws(' ', m.data->>'replyTo', m.data->>'participants')) LIKE ${like(value)}`)
+    for (const value of search.subject) filters.push(`postfold_fold(m.data->>'subject') LIKE ${like(value)}`)
+    if (search.folder.length) filters.push(`${project} = ANY(${bind(matchingIds(projects, (item) => projectPath(projects, item.id), search.folder))}::text[])`)
+    if (search.label.length) filters.push(`COALESCE(s.label_ids, ARRAY[]::text[]) && ${bind(matchingIds(labels, (item) => item.name, search.label))}::text[]`)
+    for (const flag of search.is) filters.push({ unread: state('unread', "(m.data->>'unread')::boolean"), read: `NOT ${state('unread', "(m.data->>'unread')::boolean")}`,
+      open: `${state('status', "m.data->>'status'")} = 'open'`, waiting: `${state('status', "m.data->>'status'")} = 'waiting'`, closed: `${state('status', "m.data->>'status'")} = 'closed'`,
+      assigned: 's.assignee_id IS NOT NULL', unassigned: 's.assignee_id IS NULL' }[flag])
+    if (search.attachment) filters.push(`jsonb_array_length(CASE WHEN jsonb_typeof(m.data->'attachmentNames') = 'array' THEN m.data->'attachmentNames' ELSE '[]' END) > 0`)
+    if (search.before) filters.push(`m.data->>'sentAt' < ${bind(search.before)}`)
+    if (search.after) filters.push(`m.data->>'sentAt' >= ${bind(search.after)}`)
+    const where = filters.join(' AND ')
     const from = 'FROM mail_messages m LEFT JOIN demo_conversation_state s ON s.mailbox_id = m.mailbox_id AND s.id = m.id'
-    const [{ rows }, { rows: [total] }] = await Promise.all([
-      this.pool.query<{ data: CachedMessage['data'] }>(`SELECT m.data - 'references' AS data ${from} WHERE ${filters}
-        AND ($8::text IS NULL OR (m.data->>'sentAt', m.id) ${oldest ? '>' : '<'} ($8, $9))
-        ORDER BY m.data->>'sentAt' ${oldest ? 'ASC' : 'DESC'}, m.id ${oldest ? 'ASC' : 'DESC'} LIMIT $10`, [...values, cursorAt, cursorId, limit + 1]),
-      this.pool.query<{ messages: number; threads: number }>(`SELECT count(*)::integer AS messages, count(DISTINCT COALESCE(m.data->>'threadId', m.id))::integer AS threads ${from} WHERE ${filters}`, values),
-    ])
-    const messages = rows.slice(0, limit).map((row) => row.data)
+    const filterValues = [...values]
+    // Relevance: exact words over corrected ones, words in the subject or the sender, then recent mail first.
+    // Built only when used: PostgreSQL rejects parameters that the statement never references.
+    const rank = () => `${words.map((word) => `(CASE WHEN m.search LIKE ${like(word)} THEN 1 ELSE 0.5 END
+        + CASE WHEN postfold_fold(m.data->>'subject') LIKE ${like(word)} THEN 0.6 ELSE 0 END
+        + CASE WHEN postfold_fold(concat_ws(' ', m.data->'sender'->>'name', m.data->'sender'->>'email')) LIKE ${like(word)} THEN 0.4 ELSE 0 END)`).join(' + ') || '0'}
+      + 0.3 * exp(-GREATEST(extract(epoch FROM now() - (m.data->>'sentAt')::timestamptz), 0) / 15552000)`
+    // The excerpt shows where the longest word appears in the body, as plain text.
+    const longest = bind([...words].sort((a, b) => b.length - a.length)[0] ?? '')
+    const excerpt = `CASE WHEN ${longest} <> '' AND m.body IS NOT NULL AND strpos(postfold_fold(m.body), ${longest}) > 0
+      THEN substr(m.body, GREATEST(1, strpos(postfold_fold(m.body), ${longest}) - 60), 240) END`
+    const page = order === 'relevance'
+      ? `ORDER BY ${rank()} DESC, m.data->>'sentAt' DESC, m.id DESC OFFSET ${bind(cursor ?? 0)} LIMIT ${bind(limit + 1)}`
+      : `${cursor ? `AND (m.data->>'sentAt', m.id) ${order === 'oldest' ? '>' : '<'} (${bind((cursor as string[])[0])}, ${bind((cursor as string[])[1])})` : ''}
+        ORDER BY m.data->>'sentAt' ${order === 'oldest' ? 'ASC' : 'DESC'}, m.id ${order === 'oldest' ? 'ASC' : 'DESC'} LIMIT ${bind(limit + 1)}`
+    const [rows, total] = await this.searchQuery(async (client) => [
+      (await client.query<{ data: CachedMessage['data']; excerpt: string | null }>(`SELECT m.data - 'references' AS data, ${excerpt} AS excerpt ${from} WHERE ${where} ${page}`, values)).rows,
+      (await client.query<{ messages: number; threads: number }>(`SELECT count(*)::integer AS messages, count(DISTINCT COALESCE(m.data->>'threadId', m.id))::integer AS threads ${from} WHERE ${where}`, filterValues)).rows[0],
+    ] as const)
+    const messages: Conversation[] = rows.slice(0, limit).map((row) => row.excerpt ? { ...row.data, snippet: row.excerpt.replace(/\s+/g, ' ').trim() } : row.data)
     const last = messages.at(-1)
-    const nextCursor = rows.length > limit && last ? Buffer.from(JSON.stringify([last.sentAt ?? '', last.id])).toString('base64url') : null
+    const nextCursor = rows.length <= limit || !last ? null : Buffer.from(JSON.stringify(order === 'relevance' ? Number(cursor ?? 0) + limit : [last.sentAt ?? '', last.id])).toString('base64url')
     // Threads are shown whole, and the open conversation stays loaded whatever the filters.
     const threadIds = query.threads ? [...new Set(messages.map((item) => item.threadId ?? item.id))] : []
     const extra = threadIds.length || query.include?.length ? (await this.pool.query<{ data: CachedMessage['data'] }>(`SELECT m.data - 'references' AS data FROM mail_messages m
@@ -419,7 +467,121 @@ export class MailStore extends ProjectStore {
     [this.mailboxId, threadIds, query.include ?? []])).rows.map((row) => row.data) : []
     const seen = new Set(messages.map((item) => item.id))
     for (const item of extra) if (!seen.has(item.id)) { seen.add(item.id); messages.push(item) }
-    return { messages, total: query.threads ? total.threads : total.messages, nextCursor }
+    return { messages, total: query.threads ? total.threads : total.messages, nextCursor, corrections: [...variants.values()].flat() }
+  }
+
+  // Messages imported before attachment names were indexed get them from their archived MIME, a few per idle cycle.
+  private async indexAttachments(started: number) {
+    let indexed = 0
+    while (Date.now() - started < ATTACHMENT_INDEX_MS && !this.waiting) {
+      const { rows } = await this.pool.query<{ id: string; source: Buffer }>(`SELECT m.id, a.source FROM mail_messages m
+        JOIN mail_archives a ON a.mailbox_id = m.mailbox_id AND a.message_id = m.id AND a.sha256 = m.source_sha256
+        WHERE m.mailbox_id = $1 AND NOT (m.data ? 'attachmentNames') LIMIT 20`, [this.mailboxId])
+      if (!rows.length) break
+      for (const row of rows) {
+        const names = await simpleParser(row.source).then((parsed) => parsed.attachments.filter((file) => !file.related).map((file) => cleanText(file.filename ?? '')), () => [])
+        await this.pool.query("UPDATE mail_messages SET data = data || jsonb_build_object('attachmentNames', $3::jsonb) WHERE mailbox_id = $1 AND id = $2", [this.mailboxId, row.id, JSON.stringify(names)])
+        indexed++
+      }
+    }
+    if (indexed) {
+      const { rows: [{ left }] } = await this.pool.query<{ left: number }>(`SELECT count(*)::integer AS left FROM mail_messages m
+        WHERE m.mailbox_id = $1 AND NOT (m.data ? 'attachmentNames') AND EXISTS (SELECT 1 FROM mail_archives a WHERE a.mailbox_id = m.mailbox_id AND a.message_id = m.id AND a.sha256 = m.source_sha256)`, [this.mailboxId])
+      this.log('info', 'Search: attachment names indexed for {0} messages, {1} left', indexed, left)
+    }
+  }
+
+  // Searches run with a time limit (a pathological query cannot hold the database) and a typo tolerance tuned for mail.
+  private async searchQuery<T>(run: (client: import('pg').PoolClient) => Promise<T>) {
+    const client = await this.pool.connect()
+    try {
+      await client.query('BEGIN READ ONLY')
+      await client.query(`SET LOCAL statement_timeout = ${SEARCH_TIMEOUT_MS}`)
+      const result = await run(client)
+      await client.query('COMMIT')
+      return result
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {})
+      if ((error as { code?: string }).code === '57014') throw new ServiceUnavailableException('Search took too long. Add a word or a filter.')
+      throw error
+    } finally { client.release() }
+  }
+
+  // Candidate corrections come from the mailbox's own vocabulary (trigram neighbours), then a typo distance with transpositions.
+  private async typoVariants(words: string[]) {
+    const variants = new Map<string, string[]>()
+    if (!this.fuzzy) return variants
+    for (const word of words) {
+      const budget = typoBudget(word)
+      if (!budget) continue
+      const { rows } = await this.searchQuery(async (client) => {
+        await client.query('SET LOCAL pg_trgm.similarity_threshold = 0.2')
+        return client.query<{ word: string }>('SELECT word FROM mail_search_words WHERE mailbox_id = $1 AND word % $2 ORDER BY similarity(word, $2) DESC LIMIT 200', [this.mailboxId, word])
+      })
+      variants.set(word, rows.map((row) => row.word).filter((candidate) => candidate !== word && typoDistance(word, candidate, budget) <= budget).slice(0, TYPO_VARIANTS))
+    }
+    return variants
+  }
+
+  // The search document lives next to each message (same table, same access rules, deleted with it); nothing leaves PostgreSQL.
+  private async initSearch() {
+    const client = await this.pool.connect()
+    try {
+      await client.query('BEGIN')
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('postfold:search-schema'))")
+      await client.query('ALTER TABLE mail_messages ADD COLUMN IF NOT EXISTS search text')
+      await client.query(`CREATE OR REPLACE FUNCTION postfold_fold(value text) RETURNS text LANGUAGE sql IMMUTABLE PARALLEL SAFE
+        AS $$ SELECT lower(translate(value, 'ÀÂÄÁÃÅÉÈÊËÍÌÎÏÓÒÔÖÕÚÙÛÜÇÑÝàâäáãåéèêëíìîïóòôöõúùûüçñýÿ', 'AAAAAAEEEEIIIIOOOOOUUUUCNYaaaaaaeeeeiiiiooooouuuucnyy')) $$`)
+      await client.query(`CREATE OR REPLACE FUNCTION postfold_search_document(data jsonb, body text) RETURNS text LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+        SELECT postfold_fold(concat_ws(' ', data->>'subject', data->'sender'->>'name', data->'sender'->>'email', data->>'replyTo',
+          (SELECT string_agg(concat_ws(' ', person->>'name', person->>'email'), ' ') FROM jsonb_array_elements(CASE WHEN jsonb_typeof(data->'participants') = 'array' THEN data->'participants' ELSE '[]' END) person),
+          (SELECT string_agg(name, ' ') FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(data->'attachmentNames') = 'array' THEN data->'attachmentNames' ELSE '[]' END) name),
+          data->>'preview', left(body, ${SEARCH_BODY_CHARS})))
+      $$`)
+      // Vocabulary of each mailbox (letters only, 4 to 40 characters) for typo correction; dropped with the mailbox.
+      await client.query(`CREATE TABLE IF NOT EXISTS mail_search_words (
+        mailbox_id text NOT NULL REFERENCES demo_project_settings(mailbox_id) ON DELETE CASCADE,
+        word text NOT NULL, PRIMARY KEY (mailbox_id, word))`)
+      await client.query(`CREATE OR REPLACE FUNCTION postfold_mail_search() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          NEW.search := postfold_search_document(NEW.data, NEW.body);
+          IF TG_OP = 'INSERT' OR NEW.search IS DISTINCT FROM OLD.search THEN
+            INSERT INTO mail_search_words (mailbox_id, word) SELECT DISTINCT NEW.mailbox_id, token
+            FROM regexp_split_to_table(NEW.search, '[^[:alpha:]]+') AS token WHERE length(token) BETWEEN 4 AND 40 ON CONFLICT DO NOTHING;
+          END IF;
+          RETURN NEW;
+        END $$`)
+      await client.query('CREATE OR REPLACE TRIGGER mail_messages_search BEFORE INSERT OR UPDATE OF data, body ON mail_messages FOR EACH ROW EXECUTE FUNCTION postfold_mail_search()')
+      await client.query('COMMIT')
+    } catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error } finally { client.release() }
+    // Typo tolerance needs pg_trgm (a trusted extension, bundled with PostgreSQL); without it search stays partial and exact.
+    try { await this.pool.query('CREATE EXTENSION IF NOT EXISTS pg_trgm'); this.fuzzy = true }
+    catch (error) { this.log('warn', 'Typo-tolerant search unavailable: {0}', describeError(error)) }
+    // Existing messages are indexed in the background so the API starts within its health-check delay.
+    void this.prepareSearch().catch((error) => { if (!/pool after calling end/.test(String(error))) this.log('warn', 'Search index preparation stopped: {0}', describeError(error)) })
+  }
+
+  private async prepareSearch() {
+    const started = Date.now()
+    let prepared = 0
+    // Messages indexed before the vocabulary existed are indexed again once, which fills it.
+    await this.pool.query('UPDATE mail_messages SET search = NULL WHERE mailbox_id = $1 AND search IS NOT NULL AND NOT EXISTS (SELECT 1 FROM mail_search_words WHERE mailbox_id = $1)', [this.mailboxId])
+    for (;;) {
+      const { rowCount } = await this.pool.query('UPDATE mail_messages SET body = body WHERE ctid IN (SELECT ctid FROM mail_messages WHERE mailbox_id = $1 AND search IS NULL LIMIT 1000)', [this.mailboxId])
+      if (!rowCount) break
+      prepared += rowCount
+    }
+    if (prepared) this.log('info', 'Search: {0} messages indexed in {1} s', prepared, secondsSince(started))
+    if (!this.fuzzy) return
+    // CONCURRENTLY keeps synchronization writing while trigram indexes are built; a failed build leaves an invalid index to replace.
+    for (const [name, definition] of [['mail_messages_search', 'mail_messages USING gin (search gin_trgm_ops)'], ['mail_search_words_trigram', 'mail_search_words USING gin (word gin_trgm_ops)']]) {
+      const { rows } = await this.pool.query('SELECT indisvalid AS valid FROM pg_index WHERE indexrelid = to_regclass($1)', [name])
+      if (rows[0]?.valid) continue
+      const building = Date.now()
+      if (rows[0]) await this.pool.query(`DROP INDEX CONCURRENTLY IF EXISTS ${name}`)
+      await this.pool.query(`CREATE INDEX CONCURRENTLY IF NOT EXISTS ${name} ON ${definition}`)
+      this.log('info', 'Search index built in {0} s', secondsSince(building))
+    }
   }
 
   private async counts(): Promise<MailboxCounts> {
@@ -468,6 +630,7 @@ export class MailStore extends ProjectStore {
           const seconds = secondsSince(started)
           this.lastSync = new Date().toISOString(); this.syncError = false
           resume = !result.complete
+          if (result.complete) await this.indexAttachments(started)
           if (result.imported) this.progress.rate = Math.round(result.imported / Math.max(seconds, 0.1) * 10) / 10
           this.progress.lastCycle = { finishedAt: this.lastSync, seconds, imported: result.imported, complete: result.complete }
           this.log('info', result.complete ? 'Synchronization finished in {0} s: {1} new, {2} messages in {3} folders' : 'Synchronization step finished in {0} s: {1} new, {2} messages in {3} folders; import continues',
@@ -686,7 +849,8 @@ export class MailStore extends ProjectStore {
             participants,
             subject: parsed.subject ?? '(No subject)', preview: body.replace(/\s+/g, ' ').slice(0, 200), body,
             time: sentAt.slice(0, 10), status: outgoing ? 'waiting' : 'open', assignee: null, unread, labelIds: [], outgoing, imapReady: true, replyTo: email, references,
-            receivedAt: new Date(item.message.internalDate || date).toISOString(), ...(rawId ? { messageId: rawId } : {}) })
+            receivedAt: new Date(item.message.internalDate || date).toISOString(), ...(rawId ? { messageId: rawId } : {}),
+            attachmentNames: parsed.attachments.filter((file) => !file.related).map((file) => file.filename ?? '') })
           if (restoring) { restorationClaimed = true; restoredStates.set(data.id,restoring.snapshot) }
           else if (archived[0]?.message_id === data.id) restoredStates.set(data.id, archived[0].snapshot)
           claimedArchiveIds.add(data.id)

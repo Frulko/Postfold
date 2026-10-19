@@ -63,6 +63,9 @@ try {
     const body = `Bonjour,\r\n\r\nMessage ${index} 🎉 pour le dossier ${path}.\r\n${'Lorem ipsum dolor sit amet. '.repeat(20)}\r\n`
     await imap.append(path, `From: Client ${index % 500} <client${index % 500}@example.test>\r\nTo: support@postfold.test\r\nSubject: Demande ${index}\r\nMessage-ID: <scale-${index}@example.test>\r\nDate: ${date.toUTCString()}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}`, index % 3 ? ['\\Seen'] : [], date)
   }
+  await imap.append('0004 - Client 4', ['From: Juriste <legal@example.test>', 'To: support@postfold.test', 'Subject: Contrat signé', 'Message-ID: <contract@example.test>', 'MIME-Version: 1.0',
+    'Content-Type: multipart/mixed; boundary=b', '', '--b', 'Content-Type: text/plain; charset=utf-8', '', 'Voici le contrat.', '--b', 'Content-Type: application/pdf; name="contrat-2024.pdf"',
+    'Content-Disposition: attachment; filename="contrat-2024.pdf"', 'Content-Transfer-Encoding: base64', '', Buffer.from('%PDF-1.4').toString('base64'), '--b--', ''].join('\r\n'), ['\\Seen'])
   console.info(`Seeded ${MESSAGES} messages in ${paths.length} folders in ${seconds(seeding)} s`)
 
   store = new MailStore(accountId)
@@ -82,7 +85,7 @@ try {
   }
   console.info(`Full import: ${seconds(importing)} s`)
   const { rows: [{ count }] } = await pool.query('SELECT count(*)::integer AS count FROM mail_messages WHERE mailbox_id=$1', [`imap:${accountId}`])
-  assert.equal(count, MESSAGES)
+  assert.equal(count, MESSAGES + 1)
 
   // Steady state: nothing changed, so no folder is rescanned and nothing is rewritten.
   const lastLog = async (prefix) => (await store.readLogs(0)).entries.findLast((entry) => entry.message.startsWith(prefix))
@@ -111,10 +114,35 @@ try {
   assert.ok(window.conversations.some((item) => item.subject === 'Demande 1999'))
   const first = await store.mailbox({})
   assert.equal(first.conversations.length, 200)
-  assert.equal(first.counts.messages, MESSAGES + 1)
+  assert.equal(first.counts.messages, MESSAGES + 2)
   const second = await store.mailbox({ cursor: first.page.nextCursor })
   assert.ok(second.conversations.every((item) => !first.conversations.some((other) => other.id === item.id)), 'Pages must not overlap')
   assert.ok(second.conversations[0].sentAt <= first.conversations.at(-1).sentAt, 'Pages continue in date order')
+  // Search engine: typos, partial words, operators, phrases, exclusions, attachments, ranking, hostile input and limits.
+  const search = async (query, extra = {}) => { const start = Date.now(); const result = await store.mailbox({ query, order: 'relevance', ...extra }); assert.ok(Date.now() - start < 3000, `Search "${query}" must stay fast`); return result }
+  const subjects = (result) => result.conversations.map((item) => item.subject)
+  const typo = await search('Demnade 1999')
+  assert.equal(subjects(typo)[0], 'Demande 1999', 'A typo still finds the message, ranked first')
+  assert.ok(typo.page.corrections.includes('demande'), 'Corrected spellings are returned for highlighting')
+  assert.equal(subjects(await search('dema 1999'))[0], 'Demande 1999', 'Partial words match')
+  assert.ok((await search('de:client42@ lorem')).conversations.every((item) => item.sender.email === 'client42@example.test'))
+  const phrase = await search('"pour le dossier 0003 - client 3"')
+  // GreenMail's delimiter is ".", so "0003 - Client 3/Devis" is a sibling folder sharing the 0003 code.
+  const client3 = phrase.projects.filter((project) => project.code === '0003').map((project) => project.id)
+  assert.ok(phrase.page.total > 0 && phrase.conversations.every((item) => client3.includes(item.projectId)), 'Exact phrases match in order')
+  assert.equal((await search('client42 -dossier')).page.total, 0, 'Excluded words remove every match')
+  const contract = await search('contrat-2024')
+  assert.equal(subjects(contract)[0], 'Contrat signé', 'Attachment names are searchable')
+  assert.equal((await search('avec:pj')).page.total, 1)
+  assert.equal((await search("%' OR 1=1 --")).page.total, 0, 'Hostile input is plain text')
+  assert.equal((await search('100%')).page.total, 0, 'LIKE wildcards are literal')
+  await assert.rejects(store.mailbox({ query: Array.from({ length: 13 }, (_, index) => `mot${index}`).join(' ') }), /too many terms/)
+  await assert.rejects(store.mailbox({ query: 'x', cursor: 'not-a-cursor' }), /Invalid list cursor/)
+  const ranked = await search('Demande', { limit: 50 })
+  const next = await search('Demande', { limit: 50, cursor: ranked.page.nextCursor })
+  assert.ok(next.conversations.every((item) => !ranked.conversations.some((other) => other.id === item.id)), 'Relevance pages do not overlap')
+  assert.ok((await search('lorem 1999')).conversations[0].snippet?.toLowerCase().includes('lorem'), 'Results carry a plain-text excerpt around the match')
+  console.info(`Search engine: typos, partial words, operators, attachments, ranking and hostile input passed`)
   const folder = await store.mailbox({ projectId: '0003' })
   assert.ok(folder.conversations.length > 0 && folder.conversations.every((item) => ['0003', ...first.projects.filter((project) => project.parentId === '0003').map((project) => project.id)].includes(item.projectId)), 'A folder window includes its subfolders only')
 
@@ -169,6 +197,13 @@ try {
       await browser('eval', `document.querySelector(".main-nav button").click()`)
       await browser('fill', '.search-field input', 'Demande 1999')
       await browser('wait', '--fn', `(() => { const rows = [...document.querySelectorAll(".thread-row")]; return rows.length > 0 && rows.length < 20 && rows.some((row) => row.textContent.includes("Demande 1999")) })()`)
+      await browser('fill', '.search-field input', 'Demnade 1999')
+      await browser('wait', '--fn', `(() => { const first = document.querySelector(".thread-row"); return first?.textContent.includes("Demande 1999") && !!first.querySelector("mark") && document.querySelector(".mail-order select").value === "relevance" })()`)
+      assert.ok((await browser('eval', 'document.querySelector("#search-help").hidden')) === 'false', 'The search syntax help is shown while searching')
+      if (process.env.MAIL_SEARCH_SCREENSHOT) await browser('screenshot', process.env.MAIL_SEARCH_SCREENSHOT)
+      await browser('fill', '.search-field input', 'avec:pj contrat')
+      await browser('wait', '--fn', `(() => { const rows = [...document.querySelectorAll(".thread-row")]; return rows.length === 1 && rows[0].textContent.includes("Contrat signé") })()`)
+      await browser('fill', '.search-field input', 'Demande 1999')
       await browser('eval', `document.querySelector(".main-nav button:nth-child(2)").click()`)
       await browser('fill', '.list-header .search-field input', 'client42@')
       await browser('wait', '--fn', `[...document.querySelectorAll(".contact-row")].some((row) => row.textContent.includes("Client 42"))`)
@@ -193,7 +228,7 @@ try {
         try { await browser('wait', '--fn', `[...document.querySelectorAll(".thread-row")].some((row) => row.textContent.includes("Vague "))`); break }
         catch (error) { if (attempt >= 12) throw error }
       }
-      console.info('Browser: whole-mailbox counts, infinite scroll across windows, folder, search and contact windows: passed')
+      console.info('Browser: whole-mailbox counts, infinite scroll across windows, folder, typo-tolerant ranked search with highlights, operators and contact windows: passed')
     } finally { await browser('close').catch(() => {}) }
   }
   console.info(`PASS: ${MESSAGES} messages in ${paths.length} folders, ${cycles.length} import cycles, steady and incremental cycles, responsive user actions`)

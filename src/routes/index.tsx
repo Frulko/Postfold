@@ -5,7 +5,7 @@ import { deleteDraftFiles } from '../lib/draft-attachments'
 import { useI18n } from '../lib/i18n'
 import { Suspense, lazy, useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
-import { compareMessages, filterConversations, includesContact, mailboxRows, suggestProjects, threadContacts, threadKey, updateSelection, type MailOrder } from '../lib/mailbox'
+import { compareMessages, filterConversations, highlightParts, includesContact, mailboxRows, suggestProjects, threadContacts, threadKey, updateSelection, type MailOrder } from '../lib/mailbox'
 import { getDemoMailbox, listMailbox, searchContacts, saveProjectSettings, savePreferences, updateConversationState, syncMailbox, sendReply } from '../server/demo'
 import { Icon } from '../components/icon'
 import { ProjectPicker } from '../components/project-picker'
@@ -22,6 +22,7 @@ import { AssignmentPicker } from '../components/assignment-picker'
 import { ConversationActivity } from '../components/conversation-activity'
 import { MessageBody, prefetchMessage } from '../components/message-body'
 import { SyncProgressBanner } from '../components/sync-progress'
+import { searchHighlights } from '../../shared/search'
 
 const MailComposer = lazy(() => import('../components/mail-composer').then(module => ({ default: module.MailComposer })))
 const AuthoringPage = lazy(() => import('../components/authoring-settings').then(module => ({ default: module.AuthoringPage })))
@@ -264,8 +265,8 @@ function MailboxPage() {
 
   const mailbox = baseMailbox
   const activeLabel = mailbox.labels?.some((item) => item.id === labelId) ? labelId : null
-  // Live windows are filtered by colleague in PostgreSQL (assignment and activity); the demo filters its assignments.
-  const filtered = (source: DemoMailbox) => filterConversations(source, projectId, query)
+  // Live windows are searched and filtered by colleague in PostgreSQL (typos, operators, activity); the demo filters locally.
+  const filtered = (source: DemoMailbox) => filterConversations(source, projectId, windowed ? '' : query)
     .filter((item) => (status === 'all' || (status === 'unread' ? item.unread : item.status === status)) && (!activeLabel || item.labelIds?.includes(activeLabel)) &&
       (!memberId || windowed || item.assigneeId === memberId))
   const conversations = filtered(mailbox)
@@ -273,7 +274,16 @@ function MailboxPage() {
   const listOrder = local.listOrder ?? 'newest'
   const conversationOrder = local.conversationOrder ?? 'oldest'
   const contactCollapsed = view === 'mail' && !!local.contactCollapsed
-  const rows = mailboxRows(conversations, displayMode, listOrder)
+  const [debouncedQuery, setDebouncedQuery] = useState('')
+  useEffect(() => { const timer = setTimeout(() => setDebouncedQuery(query.trim()), 300); return () => clearTimeout(timer) }, [query])
+  // Live search results are ranked by relevance unless a date order is chosen for this search.
+  const [searchByDate, setSearchByDate] = useState(false)
+  useEffect(() => { if (!query.trim()) setSearchByDate(false) }, [query])
+  const rowOrder = windowed && debouncedQuery && !searchByDate ? 'relevance' as const : listOrder
+  const highlights = [...searchHighlights(windowed ? debouncedQuery : query), ...(windowed && debouncedQuery ? mailbox.page?.corrections ?? [] : [])]
+  const marked = (text: string) => highlightParts(text, highlights).map((part, index) => part.mark ? <mark key={index}>{part.text}</mark> : part.text)
+  const [searchHelp, setSearchHelp] = useState(false)
+  const rows = mailboxRows(conversations, displayMode, rowOrder)
   const conversation = mailbox.conversations.find((item) => item.id === selectedId) ?? mailbox.conversations[0] ?? { id: '', projectId: '', contactId: '', subject: '', preview: '', body: '', time: '', status: 'open' as const, assignee: null, unread: false }
   const replyContact = mailbox.contacts.find((item) => item.id === conversation.contactId) ?? mailbox.contacts[0] ?? { id: '', name: '', email: '', company: '', phone: '' }
   const project = mailbox.projects.find((item) => item.id === conversation.projectId) ?? mailbox.projects[0]
@@ -282,11 +292,9 @@ function MailboxPage() {
   const participants = threadContacts(mailbox, threadMessages)
   const contact = view === 'contacts' ? mailbox.contacts.find((item) => item.id === contactId) ?? replyContact :
     (inspectedContact?.threadId === threadKey(conversation) ? participants.find((item) => item.id === inspectedContact.id) : undefined) ?? replyContact
-  const [debouncedQuery, setDebouncedQuery] = useState('')
-  useEffect(() => { const timer = setTimeout(() => setDebouncedQuery(query.trim()), 300); return () => clearTimeout(timer) }, [query])
   // The contacts view loads the history of the selected contact; the mail view loads its filters.
   const listQuery: MailboxQuery = view === 'contacts' ? { query: contact.email, order: 'newest' }
-    : { projectId, status: status as MailboxQuery['status'], labelId: activeLabel, memberId, query: debouncedQuery, threads: displayMode === 'threads', order: listOrder }
+    : { projectId, status: status as MailboxQuery['status'], labelId: activeLabel, memberId, query: debouncedQuery, threads: displayMode === 'threads', order: rowOrder }
   const listKey = JSON.stringify(listQuery)
   listQueryRef.current = listQuery
   selectedRef.current = selectedId
@@ -302,12 +310,14 @@ function MailboxPage() {
       if (!active || !isCurrent(listKey)) return
       acceptMailbox(fresh)
       // The open conversation follows the new filters unless a reply is being written.
-      const visible = mailboxRows(filtered(fresh), displayMode, listOrder)
+      const visible = mailboxRows(filtered(fresh), displayMode, rowOrder)
       if (view === 'mail' && !composerOpen && !visible.some((row) => row.messageIds.includes(selectedId))) setSelectedId((displayMode === 'threads' ? visible[0]?.messageIds.at(-1) : visible[0]?.id) ?? '')
-    }).catch(() => { if (active) { setConversationFailed(true); setConversationFeedback(t("Actualisation impossible. Vos données restent affichées.")) } })
+    }).catch((error) => { if (active) { setConversationFailed(true); setConversationFeedback(listError(error)) } })
       .finally(() => { if (active) setListBusy(false) })
     return () => { active = false }
   }, [listKey, online])
+  // Search limits explain themselves; any other failure keeps the generic message.
+  const listError = (error: unknown) => error instanceof Error && /^(Search |Invalid list cursor)/.test(error.message) ? t(error.message) : t("Actualisation impossible. Vos données restent affichées.")
   const loadingMore = useRef(false)
   async function loadMore() {
     const cursor = mailbox.page?.nextCursor
@@ -317,7 +327,7 @@ function MailboxPage() {
     try {
       const fresh = await listMailbox({ data: { ...listQuery, cursor } })
       if (isCurrent(listKey)) acceptMailbox(fresh, true)
-    } catch { setConversationFailed(true); setConversationFeedback(t("Actualisation impossible. Vos données restent affichées.")) }
+    } catch (error) { setConversationFailed(true); setConversationFeedback(listError(error)) }
     finally { loadingMore.current = false; setListBusy(false) }
   }
   const [contactQuery, setContactQuery] = useState('')
@@ -752,16 +762,18 @@ function MailboxPage() {
                   }
                 }
               }}><option value="messages">{t("Tous les mails")}</option><option value="threads">{t("Conversations")}</option></select></label>
-              <label className="mail-order"><span>{t("Ordre")}</span><select aria-label={t("Ordre de la liste")} value={listOrder} disabled={!storageReady} onChange={(event) => {
+              <label className="mail-order"><span>{t("Ordre")}</span><select aria-label={t("Ordre de la liste")} value={rowOrder} disabled={!storageReady} onChange={(event) => {
+                if (event.target.value === 'relevance') { setSearchByDate(false); clearSelection(); return }
                 const drafts = composerOpen ? { ...local.drafts, [conversation.id]: draft } : local.drafts
-                if (save({ ...local, drafts, listOrder: event.target.value === 'oldest' ? 'oldest' : 'newest' })) clearSelection()
-              }}><option value="newest">{t("Plus récent")}</option><option value="oldest">{t("Plus ancien")}</option></select></label>
+                if (save({ ...local, drafts, listOrder: event.target.value === 'oldest' ? 'oldest' : 'newest' })) { setSearchByDate(true); clearSelection() }
+              }}>{windowed && debouncedQuery ? <option value="relevance">{t("Pertinence")}</option> : null}<option value="newest">{t("Plus récent")}</option><option value="oldest">{t("Plus ancien")}</option></select></label>
               {mailbox.members?.length ? <label className="member-filter" title={t("Mails attribués à cette personne, ou auxquels elle a répondu, ou dont elle a changé le statut, le dossier ou les labels")}><span>{t("Traité par")}</span><select aria-label={t("Traité par")} value={memberId ?? ''} onChange={(event) => { setMemberId(event.target.value || null); clearSelection() }}>
                 <option value="">{t("Traités par tout le monde")}</option>
                 {mailbox.members.filter((member) => member.active !== false || member.id === memberId).map((member) => <option key={member.id} value={member.id}>{member.id === mailbox.currentMemberId ? t("{0} (moi)", member.name) : member.name}</option>)}
               </select></label> : null}
               </div>
-              <div className="search-field"><Icon name="search" /><input aria-label={t("Rechercher les échanges")} placeholder={t("Rechercher un échange…")} value={query} onChange={(event) => { setQuery(event.target.value); clearSelection() }} /></div>
+              <div className="search-field"><Icon name="search" /><input aria-label={t("Rechercher les échanges")} aria-describedby={windowed ? 'search-help' : undefined} placeholder={t("Rechercher un échange…")} value={query} onFocus={() => setSearchHelp(true)} onBlur={() => setSearchHelp(false)} onChange={(event) => { setQuery(event.target.value); clearSelection() }} /></div>
+              {windowed ? <p id="search-help" className="search-help" hidden={!searchHelp && !query}>{t("Fautes et mots partiels acceptés · de:julie · pour:client · objet:devis · dans:dossier · label:urgent · est:non-lu · avec:pj · avant:2024-06 · après:2024 · \"phrase exacte\" · -exclure")}</p> : null}
               <div className="filters" role="group" aria-label={t("État des conversations")}>{[['all', t("Tous")], ['unread', t("Non lus")], ['open', t("À traiter")], ['waiting', t("En attente")], ['closed', t("Terminés")]].map(([key, label]) => <button key={key} aria-pressed={status === key} onClick={() => { setStatus(key); clearSelection() }}>{label}</button>)}</div>
               <div className="list-tools" ref={bulkTools} onKeyDown={(event) => {
                 if (event.key === 'Escape' && !event.defaultPrevented && bulkOpen) {
@@ -798,8 +810,8 @@ function MailboxPage() {
                     if (openConversation(displayMode === 'threads' ? item.messageIds.at(-1)! : item.id, true)) { clearSelection(); selectionAnchor.current = item.id }
                   }}>
                   <div className="row-top"><strong>{sender.name}</strong><time>{t(item.time)}</time></div>
-                  <div className="row-subject">{item.unread ? <span className="unread-dot" title={t("Non lu")}><span className="sr-only">{t("Non lu :")} </span></span> : <span className="sr-only">{t("Lu :")} </span>}{item.subject}{displayMode === 'threads' && item.messageIds.length > 1 ? <span className="thread-count" title={t("{0} mails dans ce fil", item.messageIds.length)}>{item.messageIds.length}</span> : null}</div>
-                  <p title={item.preview}>{item.preview}</p><div className="row-bottom"><span className="folder-label" title={projectPath(mailbox.projects, folder.id)}>{projectPath(mailbox.projects, folder.id)}</span>{item.assignee ? <span className="row-assignee" title={t("Attribué à {0}", item.assignee)} aria-label={t("Attribué à {0}", item.assignee)}>{initials(item.assignee)}</span> : null}<span className={`status ${item.status}`}>{t(statuses[item.status])}</span></div>{item.labelIds?.length ? <div className="message-labels">{(mailbox.labels ?? []).filter((label) => item.labelIds?.includes(label.id)).map((label) => <span className="label-chip" key={label.id}><span className="project-dot" style={{ backgroundColor: projectColor(label.color) }} />{label.name}</span>)}</div> : null}
+                  <div className="row-subject">{item.unread ? <span className="unread-dot" title={t("Non lu")}><span className="sr-only">{t("Non lu :")} </span></span> : <span className="sr-only">{t("Lu :")} </span>}{marked(item.subject)}{displayMode === 'threads' && item.messageIds.length > 1 ? <span className="thread-count" title={t("{0} mails dans ce fil", item.messageIds.length)}>{item.messageIds.length}</span> : null}</div>
+                  <p title={item.snippet ?? item.preview}>{item.snippet ? '… ' : null}{marked(item.snippet ?? item.preview)}</p><div className="row-bottom"><span className="folder-label" title={projectPath(mailbox.projects, folder.id)}>{projectPath(mailbox.projects, folder.id)}</span>{item.assignee ? <span className="row-assignee" title={t("Attribué à {0}", item.assignee)} aria-label={t("Attribué à {0}", item.assignee)}>{initials(item.assignee)}</span> : null}<span className={`status ${item.status}`}>{t(statuses[item.status])}</span></div>{item.labelIds?.length ? <div className="message-labels">{(mailbox.labels ?? []).filter((label) => item.labelIds?.includes(label.id)).map((label) => <span className="label-chip" key={label.id}><span className="project-dot" style={{ backgroundColor: projectColor(label.color) }} />{label.name}</span>)}</div> : null}
                   </button>
                 </div>
               })}{shownRows.length < rows.length || mailbox.page?.nextCursor ? <div key={`${shownRows.length}:${mailbox.conversations.length}`} ref={moreRows} className="list-more" aria-hidden="true" /> : null}{listBusy ? <div className="empty-state">{t("Chargement…")}</div> : null}</> : <div className="empty-state">{listBusy ? t("Chargement…") : t("Aucun échange ne correspond à votre recherche.")}</div> : (contactResults ?? mailbox.contacts).map((person) => <button className={`contact-row ${person.id === contactId ? 'selected' : ''}`} key={person.id} onClick={() => { setContactId(person.id); setNotice('') }}>

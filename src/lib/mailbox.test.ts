@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { filterConversations, filterProjects, linkParts, moveConversations, splitQuoted, suggestProjects, updateSelection, type Mailbox } from './mailbox.ts'
+import { filterConversations, filterProjects, highlightParts, linkParts, moveConversations, splitQuoted, suggestProjects, updateSelection, type Mailbox } from './mailbox.ts'
+import { parseSearch, typoBudget, typoDistance } from '../../shared/search.ts'
 import { isProjectSettings, positionProject, prepareProject, sortProjects } from '../../shared/projects.ts'
 import { applyConversationStates, isConversationUpdate, mergeConversationStates } from '../../shared/conversation-state.ts'
 
@@ -207,4 +208,30 @@ test('reader folds quoted history and signatures and links plain-text URLs and a
   assert.deepEqual(linkParts('Voir https://example.test/a?b=1. ou écrire à it@example.test.'), [
     { text: 'Voir ' }, { text: 'https://example.test/a?b=1', href: 'https://example.test/a?b=1' }, { text: '. ou écrire à ' },
     { text: 'it@example.test', href: 'mailto:it@example.test' }, { text: '.' }])
+})
+
+test('search syntax: free words, phrases, exclusions and operators in French or English', () => {
+  const query = parseSearch('Facturé "bon de commande" -relance de:Julie objet:Devis dans:client75 label:urgent est:non-lu avec:pj après:2024-03 avant:2025 lien:x')
+  assert.deepEqual(query.terms, ['facture', 'lien:x'])
+  assert.deepEqual(query.phrases, ['bon de commande'])
+  assert.deepEqual(query.excluded, ['relance'])
+  assert.deepEqual([query.from, query.subject, query.folder, query.label, query.is], [['julie'], ['devis'], ['client75'], ['urgent'], ['unread']])
+  assert.equal(query.attachment, true)
+  assert.equal(query.after, '2024-03-01T00:00:00.000Z')
+  assert.equal(query.before, '2025-01-01T00:00:00.000Z')
+  assert.equal(parseSearch('avant:31/02/2024 est:inconnu').before, null)
+  assert.deepEqual(parseSearch('%_\\').terms, ['%_\\'], 'Wildcards stay literal text; the API escapes them')
+})
+
+test('search highlights ignore case and accents without shifting the original text', () => {
+  assert.deepEqual(highlightParts('Votre FACTURE réglée', ['facture', 'reglee']), [{ text: 'Votre ' }, { text: 'FACTURE', mark: true }, { text: ' ' }, { text: 'réglée', mark: true }])
+  assert.deepEqual(highlightParts('Sans rapport', ['devis']), [{ text: 'Sans rapport' }])
+})
+
+test('typo tolerance: transpositions count once, numbers and short words stay exact', () => {
+  assert.equal(typoDistance('demnade', 'demande', 2), 1)
+  assert.equal(typoDistance('factrue', 'facture', 2), 1)
+  assert.equal(typoDistance('contat', 'contrat', 1), 1, 'A missing letter is one typo')
+  assert.equal(typoDistance('facture', 'devis', 1), 2, 'Distances beyond the limit stop early')
+  assert.deepEqual(['devis', 'factures', 'reglement', '1999', 'ab12c'].map(typoBudget), [1, 1, 2, 0, 0])
 })

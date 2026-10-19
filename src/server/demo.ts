@@ -83,6 +83,7 @@ export const listMailbox = createServerFn({ method: 'POST' })
   .handler(async ({ data }): Promise<DemoMailbox> => {
     if (process.env.MAILBOX_MODE !== 'imap') return getDemoMailbox()
     const response = await fetch(apiPath('/list'), { method: 'POST', headers: apiHeaders(), body: JSON.stringify(data), signal: AbortSignal.timeout(30_000) })
+    // Search errors (too many terms, timeout) are shown to the user; other failures stay generic.
     if ([400, 503].includes(response.status)) throw new Error((await response.json()).message ?? 'L’API de la boîte mail est indisponible.')
     if (!response.ok) throw new Error('L’API de la boîte mail est indisponible.')
     return response.json()
