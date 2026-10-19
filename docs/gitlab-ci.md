@@ -72,17 +72,41 @@ Adapter le domaine et le client à tes valeurs. Keycloak doit être joignable de
 L'API en mode `imap` attend une boîte déjà enregistrée en base. Pour une installation neuve :
 
 1. Ajouter temporairement **`MAILBOX_MODE=demo`** dans Portainer et déployer la stack. `DEMO_MODE` reste `false` : seuls les endpoints de santé et d'authentification sont démarrés, sans données de démonstration. L'interface mail n'est pas encore utilisable.
-2. Préparer sur le nœud qui héberge le conteneur API un fichier privé `/secure/path/mailbox-bootstrap.json` (mode `0600`), au format de [mailbox-setup.md](mailbox-setup.md#1-prepare-secrets-outside-the-repository). Il doit contenir le bloc `account` avec email, nom, paramètres IMAP/SMTP, mots de passe, `sentPath` et `saveSent`. Omettre le bloc `access`, réservé au mode Basic.
-3. Sur ce même nœud, importer la boîte dans l'API en cours d'exécution :
+2. Dans **Containers**, ouvrir le conteneur **Running** du service `postfold_api`, puis **Console**. Choisir `/bin/sh`, utilisateur `node` (UID 1000), puis **Connect**. La console du conteneur utilise déjà les variables et secrets de l'API ; aucune connexion SSH n'est nécessaire. Voir [la documentation Portainer](https://docs.portainer.io/2.27/user/docker/containers/console).
+3. Exécuter d'abord `unset HISTFILE`, puis coller la commande ci-dessous en remplaçant les valeurs du fournisseur. Le délimiteur `'POSTFOLD_MAILBOX_JSON'` empêche le shell d'interpréter les caractères `$` des mots de passe. Respecter la syntaxe JSON : un guillemet dans une valeur s'écrit `\"`, un antislash `\\`.
 
 ```sh
-POSTFOLD_API_CONTAINER=$(docker ps --filter label=com.docker.swarm.service.name=postfold_api --format '{{.ID}}')
-test -n "$POSTFOLD_API_CONTAINER" && docker exec -i "$POSTFOLD_API_CONTAINER" \
-  node api/dist/api/configure-mailbox.js < /secure/path/mailbox-bootstrap.json
+node /app/api/dist/api/configure-mailbox.js <<'POSTFOLD_MAILBOX_JSON'
+{
+  "account": {
+    "email": "support@example.com",
+    "name": "Support",
+    "imap": {
+      "host": "imap.example.com",
+      "port": 993,
+      "security": "tls",
+      "user": "support@example.com",
+      "password": "REPLACE_WITH_IMAP_APP_PASSWORD"
+    },
+    "smtp": {
+      "host": "smtp.example.com",
+      "port": 465,
+      "security": "tls",
+      "user": "support@example.com",
+      "password": "REPLACE_WITH_SMTP_APP_PASSWORD"
+    },
+    "sentPath": "Sent",
+    "saveSent": true
+  }
+}
+POSTFOLD_MAILBOX_JSON
 ```
 
-4. Après le message `Encrypted mailbox account saved`, supprimer le fichier JSON en clair. Remettre **`MAILBOX_MODE=imap`** dans Portainer et mettre à jour la stack. Les identifiants IMAP/SMTP sont maintenant chiffrés dans PostgreSQL ; ce ne sont pas des variables de la stack.
-5. Vérifier que les trois services sont sains, se connecter via Keycloak, relever la boîte et envoyer une réponse de test.
+Pour SMTP sur le port 587, utiliser `"security": "starttls"`. Adapter `sentPath` au dossier Envoyés réel et mettre `saveSent` à `false` si le fournisseur conserve déjà les messages envoyés. Ne pas ajouter le bloc `access`, réservé au mode Basic. Le JSON est transmis directement au programme, sans fichier à créer dans le conteneur.
+
+4. Attendre le message **`Encrypted mailbox account saved`**. Cette commande valide le format et chiffre les identifiants dans PostgreSQL ; elle ne teste pas la connexion au fournisseur. En cas d'erreur, rester dans ce mode et corriger la configuration avant de poursuivre.
+5. Fermer la console. Dans les variables **de la stack**, remettre **`MAILBOX_MODE=imap`**, puis **Update the stack**. Garder le même `MAILBOX_ID`, la même clé et `MAILBOX_KEY_ID`.
+6. Vérifier que l'API reste démarrée, se connecter via Keycloak, relever la boîte et envoyer une réponse de test. Ce sont ces opérations qui confirment l'accès IMAP/SMTP. L'import ne sera pas nécessaire aux prochains déploiements tant que la base et la clé sont conservées.
 
 Swarm démarre les services sans attendre leurs dépendances. Si PostgreSQL n'est pas encore prêt, l'API est relancée par sa politique de redémarrage. Un seul réplica API reste actif, avec remplacement `stop-first`, pour éviter deux workers IMAP simultanés.
 
