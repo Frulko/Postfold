@@ -1,30 +1,95 @@
-# GitLab CI
+# GitLab CI et Portainer Swarm
 
-The pipeline reuses `myrole/ci-templates` at `v1`, matching the BuildKit and Portainer setup in `myrole-3`. The GitLab project and the user starting the pipeline must have access to that template project. Use a Docker executor runner that supports the shared BuildKit template and PostgreSQL services.
+La CI reprend les templates `myrole/ci-templates@v1`, comme les autres projets MyRole : **build → deploy**. Un push ou un lancement manuel sur la branche par défaut construit le `Dockerfile`, publie `registry.myrole.app/myrole/postfold:latest` et `:sha-<CI_COMMIT_SHORT_SHA>`, puis appelle le webhook Portainer s'il est configuré. Seule la production est gérée. La compilation se fait dans l'image ; il n'y a pas de job de tests GitLab séparé.
 
-## Pipeline behavior
+Le runner et l'utilisateur qui lance la pipeline doivent avoir accès aux templates. L'authentification au registre pendant le build utilise les variables prédéfinies GitLab. Les réglages BuildKit déjà hérités du groupe MyRole restent utilisables.
 
-- Branch pushes, merge requests and manual branch pipelines run TypeScript checks, the production build and the existing unit/API tests against an isolated PostgreSQL 17 service. Feature-branch push pipelines are suppressed while a merge request is open; default-branch and staging push pipelines always run.
-- Successful default-branch pipelines publish `$CI_REGISTRY_IMAGE:latest` and `:commit-$CI_COMMIT_SHA`.
-- Successful `staging` pipelines publish `$CI_REGISTRY_IMAGE:staging` and `:commit-$CI_COMMIT_SHA`.
-- Other branches and merge requests only run checks. Git tags do not start this pipeline.
-- Production/staging deployments run after checks and image publication, only when the corresponding webhook URL is configured. The shared deployment template serializes deployments per environment.
+## Variables GitLab
 
-The checks call `node --test` directly after `pnpm build`: `pnpm test` would start a local PostgreSQL container through Docker Compose, while GitLab provides the database as a service. Browser, real-mail and container-persistence integration checks remain in the existing GitHub Actions workflow.
+Dans **Settings → CI/CD → Variables** :
 
-## Portainer configuration
-
-Configure these CI/CD variables in GitLab, following the existing `myrole-3` setup:
-
-| Variable | Purpose |
+| Variable | Valeur |
 | --- | --- |
-| `PORTAINER_WEBHOOK_URL` | Production stack update webhook; omit to disable automatic production deployment. |
-| `PORTAINER_WEBHOOK_SECRET` | Optional production webhook secret sent in `x-webhook-secret`. |
-| `PORTAINER_STAGING_WEBHOOK_URL` | Staging stack update webhook; omit to disable automatic staging deployment. |
-| `PORTAINER_STAGING_WEBHOOK_SECRET` | Optional staging webhook secret. |
+| `PORTAINER_WEBHOOK_URL` | Webhook de mise à jour de la stack de production. Sans cette variable, la CI publie seulement l'image. |
+| `PORTAINER_WEBHOOK_SECRET` | Facultatif : secret envoyé dans `x-webhook-secret`, seulement si ton endpoint le demande. |
 
-Keep webhook URLs and secrets masked. Protect production variables and the default branch; protect `staging` too if staging variables are protected. BuildKit registry authentication uses GitLab's predefined registry credentials. The shared template also supports the same optional `BUILDKIT_MIRROR_HOST` and `BUILDKIT_TLS_CA` / `BUILDKIT_TLS_CERT` / `BUILDKIT_TLS_KEY` settings as `myrole-3`.
+Masquer les valeurs et les protéger avec la branche de production. Les variables applicatives ci-dessous vont dans **Portainer**, pas dans GitLab.
 
-Use [the deployment Compose file](../deploy/compose.yaml) with `POSTFOLD_IMAGE` set to the actual GitLab registry image followed by `:latest` in production or `:staging` in staging. Both `api` and `web` use this one image. Configure Portainer with registry pull credentials for the private GitLab registry and enable pulling the updated image when the webhook runs. Use separate stacks, databases and secrets for staging and production. Application environment variables and secret files stay in the deployment configuration, outside CI.
+## Stack Portainer
 
-For a manual deployment or rollback, use the immutable `:commit-FULL_COMMIT_SHA` tag and follow [the backup and update procedure](docker.md#update-without-losing-shared-data). This pipeline does not run the application-specific backup or release scripts from `myrole-3`.
+Utiliser [`docker-compose.portainer.yml`](../docker-compose.portainer.yml) sur l'environnement **Docker Swarm**, avec une stack nommée `postfold`. Les trois services utilisent le réseau overlay créé par Swarm. L'API et PostgreSQL ne publient aucun port ; le web publie **3002** en ingress. Le reverse proxy HTTPS cible **HTTP, adresse d'un nœud Swarm, port 3002**, en conservant le header `Origin`.
+
+Ajouter `registry.myrole.app` aux registres Portainer avec un deploy token GitLab ayant `read_registry`, et sélectionner ce registre pour la stack. Les images sont écrites directement dans le Compose, comme les autres stacks MyRole. Le premier build GitLab doit avoir publié `latest` avant le déploiement.
+
+Dans **Environment variables**, renseigner :
+
+```dotenv
+POSTGRES_PASSWORD=REMPLACER_PAR_UN_MOT_DE_PASSE_HEXADECIMAL
+POSTFOLD_ORIGIN=https://postfold.myrole.app
+KEYCLOAK_ISSUER=https://TON_KEYCLOAK/realms/TON_REALM
+```
+
+`POSTFOLD_ORIGIN` est l'origine publique exacte, sans chemin ni slash final. `KEYCLOAK_ISSUER` est l'URL HTTPS du realm, sans suffixe `/.well-known/openid-configuration`. Générer le mot de passe PostgreSQL avec `openssl rand -hex 32` : l'hexadécimal peut être inséré directement dans l'URL de connexion.
+
+Les autres variables ont déjà leurs valeurs par défaut ; ne les ajouter que pour les modifier :
+
+| Variable | Défaut | Usage |
+| --- | --- | --- |
+| `KEYCLOAK_CLIENT_ID` | `postfold` | Client OIDC confidentiel. |
+| `KEYCLOAK_REQUIRED_ROLE` | `support` | Rôle **du client** nécessaire pour se connecter. |
+| `KEYCLOAK_ADMIN_ROLE` | `support-admin` | Rôle du client pour administrer Postfold. |
+| `MAILBOX_ID` | `support` | Identifiant stable de la boîte partagée. |
+| `MAILBOX_KEY_ID` | `v1` | Version de la clé de chiffrement, à conserver avec les sauvegardes. |
+| `MAILBOX_SYNC_LIMIT` | `200` | Nouveaux messages importés par dossier et par cycle, de 1 à 1000. |
+| `MAILBOX_MODE` | `imap` | Mettre temporairement `demo` pour le premier import décrit ci-dessous. |
+
+La stack impose `POSTFOLD_AUTH=keycloak` et `DEMO_MODE=false`. `DATABASE_URL`, les chemins des secrets et l'adresse interne de l'API sont déjà configurés.
+
+## Deux secrets Docker à créer une seule fois
+
+Dans **Portainer → Secrets**, créer :
+
+| Nom exact | Contenu |
+| --- | --- |
+| `postfold_mailbox_key` | Une clé générée avec `openssl rand -hex 32` : 64 caractères hexadécimaux. Réutiliser la clé existante si tu migres une installation. |
+| `postfold_keycloak_client_secret` | Le secret du client Keycloak `postfold`, onglet Credentials. |
+
+Le Compose monte ces [secrets Swarm](https://docs.docker.com/engine/swarm/secrets/) uniquement dans l'API, sous forme de fichiers privés lisibles par son utilisateur UID 1000. L'application exige ces fichiers ; des variables `MAILBOX_KEY` ou `KEYCLOAK_CLIENT_SECRET` ne sont pas prises en charge. Conserver une copie sécurisée de la clé : elle chiffre les identifiants mail et les sessions et ne doit pas être régénérée à chaque déploiement.
+
+Configurer le client Keycloak selon [le guide SSO](keycloak.md#1-create-the-keycloak-client), avec :
+
+- Client authentication et Standard flow activés, PKCE `S256`.
+- Redirect URI : `https://postfold.myrole.app/auth/callback`.
+- Post logout redirect URI : `https://postfold.myrole.app/auth/logged-out`.
+- Web origin : `https://postfold.myrole.app`.
+- Rôle client `support` attribué aux utilisateurs ; ajouter aussi `support-admin` aux administrateurs.
+- Mapper d'audience incluant `postfold` dans l'access token, scopes `basic`, `profile`, `email`, `roles`.
+
+Adapter le domaine et le client à tes valeurs. Keycloak doit être joignable depuis les navigateurs et depuis l'API.
+
+## Premier démarrage et import de la boîte mail
+
+L'API en mode `imap` attend une boîte déjà enregistrée en base. Pour une installation neuve :
+
+1. Ajouter temporairement **`MAILBOX_MODE=demo`** dans Portainer et déployer la stack. `DEMO_MODE` reste `false` : seuls les endpoints de santé et d'authentification sont démarrés, sans données de démonstration. L'interface mail n'est pas encore utilisable.
+2. Préparer sur le nœud qui héberge le conteneur API un fichier privé `/secure/path/mailbox-bootstrap.json` (mode `0600`), au format de [mailbox-setup.md](mailbox-setup.md#1-prepare-secrets-outside-the-repository). Il doit contenir le bloc `account` avec email, nom, paramètres IMAP/SMTP, mots de passe, `sentPath` et `saveSent`. Omettre le bloc `access`, réservé au mode Basic.
+3. Sur ce même nœud, importer la boîte dans l'API en cours d'exécution :
+
+```sh
+POSTFOLD_API_CONTAINER=$(docker ps --filter label=com.docker.swarm.service.name=postfold_api --format '{{.ID}}')
+test -n "$POSTFOLD_API_CONTAINER" && docker exec -i "$POSTFOLD_API_CONTAINER" \
+  node api/dist/api/configure-mailbox.js < /secure/path/mailbox-bootstrap.json
+```
+
+4. Après le message `Encrypted mailbox account saved`, supprimer le fichier JSON en clair. Remettre **`MAILBOX_MODE=imap`** dans Portainer et mettre à jour la stack. Les identifiants IMAP/SMTP sont maintenant chiffrés dans PostgreSQL ; ce ne sont pas des variables de la stack.
+5. Vérifier que les trois services sont sains, se connecter via Keycloak, relever la boîte et envoyer une réponse de test.
+
+Swarm démarre les services sans attendre leurs dépendances. Si PostgreSQL n'est pas encore prêt, l'API est relancée par sa politique de redémarrage. Un seul réplica API reste actif, avec remplacement `stop-first`, pour éviter deux workers IMAP simultanés.
+
+## Mises à jour
+
+Activer le webhook de la stack, configurer la récupération de la nouvelle image lors de sa mise à jour, puis mettre son URL dans `PORTAINER_WEBHOOK_URL` sur GitLab. Chaque pipeline réussie sur la branche par défaut publie `latest` puis demande le redéploiement. Le premier déploiement de la stack reste à faire dans Portainer.
+
+Conserver le nom de stack, le volume `postfold_postfold-postgres`, le mot de passe PostgreSQL et les secrets. La stack n'impose aucune contrainte de placement ; le volume PostgreSQL est local au nœud qui l'héberge et n'est pas transféré par Swarm si la tâche change de nœud. Sauvegarder la base et la clé avant une mise à jour, selon [la procédure de sauvegarde](docker.md#update-without-losing-shared-data), en utilisant les conteneurs de la stack via Portainer ou `docker exec`.
+
+Pour revenir à une image précédente, remplacer **les deux** références `:latest` du Compose par `:sha-<CI_COMMIT_SHORT_SHA>` et mettre à jour la stack. Cela ne restaure pas la base : une modification de schéma incompatible nécessite la sauvegarde correspondante.

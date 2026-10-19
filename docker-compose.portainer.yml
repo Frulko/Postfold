@@ -1,0 +1,112 @@
+# Stack Docker Swarm. Le reverse proxy termine le HTTPS et cible le port 3002.
+# Configuration et premier import IMAP/SMTP : docs/gitlab-ci.md.
+version: "3.8"
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postfold
+      POSTGRES_DB: postfold
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postfold-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postfold -d postfold"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 5s
+      update_config:
+        order: stop-first
+
+  api:
+    image: registry.myrole.app/myrole/postfold:latest
+    command: [node, api/dist/api/main.js]
+    environment:
+      DATABASE_URL: postgresql://postfold:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/postfold
+      POSTFOLD_AUTH: keycloak
+      POSTFOLD_ORIGIN: ${POSTFOLD_ORIGIN:?POSTFOLD_ORIGIN is required}
+      KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:?KEYCLOAK_ISSUER is required}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-postfold}
+      KEYCLOAK_REQUIRED_ROLE: ${KEYCLOAK_REQUIRED_ROLE:-support}
+      KEYCLOAK_ADMIN_ROLE: ${KEYCLOAK_ADMIN_ROLE:-support-admin}
+      KEYCLOAK_CLIENT_SECRET_FILE: /run/secrets/keycloak-client.secret
+      MAILBOX_KEY_FILE: /run/secrets/mailbox.key
+      MAILBOX_KEY_ID: ${MAILBOX_KEY_ID:-v1}
+      MAILBOX_ID: ${MAILBOX_ID:-support}
+      MAILBOX_MODE: ${MAILBOX_MODE:-imap}
+      MAILBOX_SYNC_LIMIT: ${MAILBOX_SYNC_LIMIT:-200}
+      DEMO_MODE: "false"
+    secrets:
+      - source: postfold_mailbox_key
+        target: mailbox.key
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+      - source: postfold_keycloak_client_secret
+        target: keycloak-client.secret
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:4000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    stop_grace_period: 30s
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 5s
+      # Un seul worker de synchronisation IMAP, y compris pendant les mises à jour.
+      update_config:
+        order: stop-first
+        failure_action: rollback
+        monitor: 90s
+      rollback_config:
+        order: stop-first
+
+  web:
+    image: registry.myrole.app/myrole/postfold:latest
+    environment:
+      API_ORIGIN: http://api:4000
+      POSTFOLD_AUTH: keycloak
+      POSTFOLD_ORIGIN: ${POSTFOLD_ORIGIN:?POSTFOLD_ORIGIN is required}
+      MAILBOX_MODE: ${MAILBOX_MODE:-imap}
+    ports:
+      - target: 3002
+        published: 3002
+        protocol: tcp
+        mode: ingress
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3002/?lang=en', {redirect: 'manual'}).then(r => process.exit([200, 401, 302, 303, 307].includes(r.status) ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 5s
+      update_config:
+        order: start-first
+        failure_action: rollback
+        monitor: 90s
+
+volumes:
+  postfold-postgres:
+
+secrets:
+  postfold_mailbox_key:
+    external: true
+  postfold_keycloak_client_secret:
+    external: true
