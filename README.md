@@ -46,6 +46,8 @@ Open **http://127.0.0.1:3002**. PostgreSQL and the separate API start automatica
 
 ## Development
 
+[GitLab CI and Portainer setup](docs/gitlab-ci.md) describes the shared BuildKit templates, registry tags and deployment variables.
+
 ```sh
 pnpm typecheck
 pnpm test
