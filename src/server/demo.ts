@@ -1,6 +1,6 @@
 import { isAuthoringChange } from '../../shared/authoring'
 import { createServerFn } from '@tanstack/react-start'
-import { isMailboxQuery, type Activity, type Contact, type ConversationState, type DemoMailbox, type MailLogEntry, type ProjectSettings, type SyncProgress } from '../../shared/mailbox'
+import { isMailboxQuery, type Activity, type Contact, type ConversationState, type DemoMailbox, type MailLogEntry, type ProjectSettings, type Reader, type SyncProgress } from '../../shared/mailbox'
 import { isProjectSettings } from '../../shared/projects'
 import { isPreferences, type Preferences } from '../../shared/preferences'
 import { isActivityIds, isConversationUpdate } from '../../shared/conversation-state'
@@ -49,6 +49,15 @@ export const getConversationActivity = createServerFn({ method: 'POST' })
   .handler(async ({ data }): Promise<Activity[]> => {
     const response = await fetch(apiPath('/conversations/activity'), { method: 'POST', headers: apiHeaders(), body: JSON.stringify(data), signal: AbortSignal.timeout(15_000) })
     if (!response.ok) throw new Error('Activity is unavailable.')
+    return response.json()
+  })
+
+// Reports the mails open in this tab and returns the colleagues reading or answering mails right now.
+export const reportPresence = createServerFn({ method: 'POST' })
+  .validator((input: unknown) => input as { ids: string[]; replying: boolean })
+  .handler(async ({ data }): Promise<Reader[]> => {
+    const response = await fetch(apiPath('/presence'), { method: 'POST', headers: apiHeaders(), body: JSON.stringify(data), signal: AbortSignal.timeout(10_000) })
+    if (!response.ok) throw new Error('Presence is unavailable.')
     return response.json()
   })
 

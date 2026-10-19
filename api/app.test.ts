@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createApp } from './app.js'
 import { ProjectStore } from './project-store.js'
+import { reportPresence } from './presence.js'
 import { Pool } from 'pg'
 
 test('l’API fonctionne et les données de démo exigent une activation explicite', async () => {
@@ -238,4 +239,16 @@ test('message data stays valid PostgreSQL JSON when a preview cuts an emoji or a
     assert.equal(rows[0].value.subject, 'ab')
     assert.equal(rows[0].value.keep, 'ok 😀 é')
   } finally { await pool.end() }
+})
+
+test('la présence montre les collègues sur un mail, jamais soi-même ni sans identité', () => {
+  const julie = { id: 'julie', name: 'Julie' }, marc = { id: 'marc', name: 'Marc' }
+  assert.deepEqual(reportPresence(undefined, { ids: ['a'], replying: false }), [])
+  assert.deepEqual(reportPresence(julie, { ids: ['a'], replying: true }), [])
+  assert.deepEqual(reportPresence(marc, { ids: ['a', 'b'], replying: false }), [{ id: 'julie', name: 'Julie', ids: ['a'], replying: true }])
+  // Closing the mail removes Julie at once instead of waiting for the expiry.
+  assert.deepEqual(reportPresence(julie, { ids: [], replying: false }), [{ id: 'marc', name: 'Marc', ids: ['a', 'b'], replying: false }])
+  assert.deepEqual(reportPresence(marc, { ids: [], replying: false }), [])
+  assert.throws(() => reportPresence(marc, { ids: 'a', replying: false }))
+  assert.throws(() => reportPresence(marc, { ids: [''], replying: false }))
 })

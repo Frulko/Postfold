@@ -456,7 +456,6 @@ textarea { width: 100%; border: 1px solid var(--line); border-radius: 7px; paddi
 .folder-collapse .icon { width: 12px; height: 12px; }
 .folder-collapse .icon { transition: transform 120ms ease; }
 .folder-collapse[aria-expanded=true] .icon { transform: rotate(90deg); }
-.insert-inside { outline: 2px solid var(--accent); background: #eff6ff; }
 .folder-dialog footer { flex-wrap: wrap; }
 .danger-button { min-height: 40px; padding: 8px 10px; color: #b91c1c; font-size: 12px; border-radius: 7px; }
 .danger-button:hover { background: #fff1f2; }
@@ -670,6 +669,30 @@ textarea { width: 100%; border: 1px solid var(--line); border-radius: 7px; paddi
 .list-options label > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .list-options select { min-height: 40px; }
 .search-help { margin: -4px 20px 10px; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
+/* Compact rows: sender, assignee, status and time on one line, then the subject, then the preview with its folder. */
+.thread-open { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; grid-template-areas: "sender assignee status time" "subject subject subject subject" "preview preview folder folder"; column-gap: 6px; row-gap: 1px; align-items: center; padding: 7px 12px 7px 34px; }
+.thread-row .row-top, .thread-row .row-bottom { display: contents; }
+.thread-row .row-top strong { grid-area: sender; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.thread-row.unread .row-top strong { font-weight: 700; }
+.thread-row .row-top time { grid-area: time; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.thread-row .row-subject { grid-area: subject; display: block; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.thread-row .row-subject .unread-dot { display: inline-block; margin-right: 5px; vertical-align: middle; }
+.thread-row p { grid-area: preview; min-width: 0; margin: 0; font-size: 11.5px; }
+.thread-row .folder-label { grid-area: folder; justify-self: end; max-width: 150px; color: var(--muted); }
+.thread-row .row-assignee { grid-area: assignee; width: 18px; height: 18px; font-size: 8.5px; }
+.thread-row .status { grid-area: status; min-height: 18px; padding: 0 5px; font-size: 9.5px; }
+.thread-row .message-labels { grid-column: 1 / -1; margin-top: 3px; }
+.thread-row .row-selection { top: 2px; width: 32px; height: 32px; }
+@media (pointer: coarse) { .thread-open { padding-top: 10px; padding-bottom: 10px; } .thread-row .row-selection { width: 40px; height: 40px; } }
+.thread-row.watched:not(.selected):not(.checked) { background: #fffbeb; border-left-color: #f59e0b; }
+.thread-row.replying:not(.selected):not(.checked) { background: #fef2f2; border-left-color: #dc2626; }
+.row-reader { display: inline-flex; align-items: center; gap: 2px; margin-right: 5px; padding: 0 4px; border-radius: 4px; background: #fde68a; color: #78350f; font-size: 9px; font-weight: 700; line-height: 16px; vertical-align: 1px; }
+.thread-row.replying .row-reader { background: #fecaca; color: #7f1d1d; }
+.row-reader svg { width: 9px; height: 9px; }
+.reader-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 0 0 12px; padding: 8px 12px; border: 1px solid #fde68a; border-radius: 8px; background: #fffbeb; color: #78350f; font-size: 12px; }
+.reader-banner.replying { border-color: #fecaca; background: #fef2f2; color: #7f1d1d; }
+.reader-banner svg { width: 14px; height: 14px; flex-shrink: 0; }
+.reader-banner button { margin-left: auto; padding: 3px 8px; border: 1px solid currentColor; border-radius: 6px; font-size: 11px; font-weight: 500; }
 .thread-row mark { padding: 0 1px; border-radius: 2px; background: #fef08a; color: inherit; }
 .member-filter { grid-column: 1 / -1; display: grid; min-width: 0; margin: 0; }
 .member-filter select { min-width: 0; width: 100%; padding: 5px 6px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); font-size: 11px; }

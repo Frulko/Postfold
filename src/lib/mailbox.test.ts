@@ -90,6 +90,7 @@ test('création, validation et tri des dossiers conservent les identifiants et l
   assert.deepEqual(ids('recent'), ['10', '2'])
   assert.deepEqual(ids('oldest'), ['2', '10'])
   assert.deepEqual(ids('code'), ['2', '10'])
+  assert.deepEqual(ids('code-desc'), ['10', '2'])
   assert.deepEqual(positionProject(projects, '10', 0).map((item) => item.id), ['10', '2'])
   assert.deepEqual(projects.map((item) => item.id), ['2', '10'])
   assert.throws(() => positionProject(projects, 'unknown', 0))
@@ -115,17 +116,28 @@ test('la relève conserve la dernière révision des états de lecture et de sui
 })
 
 test('nested folders reject cycles and duplicate siblings and expose descendant conversations', async () => {
-  const { isLabels, isProjectHierarchy, projectPath, projectTree } = await import('../../shared/projects.ts')
+  const { invalidProjectChange, isLabels, isProjectChange, isProjectTree, projectPath, projectTree } = await import('../../shared/projects.ts')
   const projects = [{ id: '1', name: 'Project', color: 'blue' }, { id: 'plans', name: 'Plans', color: 'green', parentId: '1' }, { id: 'archive', name: 'Archive', color: 'slate', parentId: 'plans' }]
-  assert.ok(isProjectHierarchy(projects))
+  assert.ok(isProjectTree(projects))
   assert.equal(prepareProject({ id: 'new', name: 'VPN', color: 'blue', parentId: '1' }, projects, null).parentId, '1')
   assert.equal(isProjectSettings({ revision: 0, sort: 'manual', projects: [{ ...projects[0], parentId: '' }], order: ['1'] }), false)
   const mailbox: Mailbox = { projects, contacts: [], conversations: [{ id: 'mail', contactId: 'p', projectId: 'archive', subject: 'VPN', preview: '', body: '', time: '', status: 'open', unread: true, assignee: null }] }
   assert.equal(filterConversations(mailbox, '1', '').length, 1)
   assert.equal(filterConversations(mailbox, 'plans', '').length, 1)
-  assert.equal(isProjectHierarchy([...projects, { id: 'copy', name: 'Plans', color: 'rose', parentId: '1' }]), false)
-  assert.equal(isProjectHierarchy(projects.map((item) => item.id === '1' ? { ...item, parentId: 'archive' } : item)), false)
-  assert.equal(isProjectHierarchy([{ ...projects[1], parentId: 'absent' }]), false)
+  assert.equal(isProjectChange(projects, { id: 'copy', name: 'plans', color: 'rose', parentId: '1' }), false)
+  assert.equal(isProjectTree(projects.map((item) => item.id === '1' ? { ...item, parentId: 'archive' } : item)), false)
+  assert.equal(isProjectTree([{ ...projects[1], parentId: 'absent' }]), false)
+  // Synchronized IMAP folders keep the server's names (spaces, slashes, case-only twins, deep trees); only edits are judged.
+  const deep = Array.from({ length: 10 }, (_, index) => ({ id: `d${index}`, name: `Level ${index}`, color: 'blue', parentId: index ? `d${index - 1}` : null }))
+  const imap = [...projects, { id: 'f_a', name: 'Archives', color: 'blue', parentId: '1' }, { id: 'f_b', name: 'archives', color: 'blue', parentId: '1' },
+    { id: 'f_c', name: 'Devis 2024/2025 ', color: 'blue', parentId: '1' }, ...deep]
+  const settings = { revision: 0, sort: 'code' as const, projects: imap, order: imap.map((item) => item.id) }
+  assert.ok(isProjectSettings(settings))
+  assert.equal(invalidProjectChange(imap, imap), undefined)
+  assert.equal(prepareProject({ id: 'f_new', name: 'Nouveau', color: 'blue', parentId: '1' }, imap, null).name, 'Nouveau')
+  assert.equal(invalidProjectChange(imap, [...imap, { id: 'f_x', name: 'ARCHIVES', color: 'blue', parentId: '1' }])?.id, 'f_x')
+  assert.equal(invalidProjectChange(imap, [...imap, { id: 'f_y', name: 'Too deep', color: 'blue', parentId: 'd9' }])?.id, 'f_y')
+  assert.equal(invalidProjectChange(imap, imap.map((item) => item.id === 'f_c' ? { ...item, name: 'a/b' } : item))?.id, 'f_c')
   assert.equal(projectPath(projects, 'archive'), '1 — Project / Plans / Archive')
   assert.deepEqual(projectTree(projects, 'manual', ['archive', 'plans', '1']).map(({ project, depth }) => [project.id, depth]), [['1', 0], ['plans', 1], ['archive', 2]])
   assert.deepEqual(projectTree(projects, 'manual', [], ['1']).map(({ project }) => project.id), ['1'])
@@ -137,6 +149,7 @@ test('nested folders reject cycles and duplicate siblings and expose descendant 
   assert.deepEqual(tree('name-asc'), ['1', 'f_c', 'f_b', 'f_a'])
   assert.deepEqual(tree('name-desc'), ['1', 'f_a', 'f_b', 'f_c'])
   assert.deepEqual(tree('code'), ['1', 'f_c', 'f_b', 'f_a'])
+  assert.deepEqual(tree('code-desc'), ['1', 'f_a', 'f_b', 'f_c'])
   assert.deepEqual(tree('recent'), ['1', 'f_c', 'f_b', 'f_a'])
   const many = Array.from({ length: 1200 }, (_, index) => ({ id: `f${index}`, name: `Folder ${index}`, color: 'blue', parentId: index ? 'f0' : null }))
   assert.ok(isProjectSettings({ revision: 0, sort: 'name-asc', projects: many, order: many.map((item) => item.id) }))

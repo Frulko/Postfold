@@ -1,6 +1,7 @@
 export type Locale = 'fr' | 'en'
 
 const english: Record<string, string> = {
+  "Un dossier créé ou modifié a un nom invalide (1 à 100 caractères, sans / ni \\), un nom déjà utilisé à son niveau ou plus de 8 niveaux.": "A created or changed folder has an invalid name (1 to 100 characters, without / or \\), a name already used at its level, or more than 8 levels.",
   "Journal": "Log",
   "Ce que fait le serveur, en direct : relèves, envois, déplacements et erreurs.": "What the server is doing, live: synchronization, sending, moves and errors.",
   "Connectez une boîte mail pour suivre son activité.": "Connect a mailbox to follow its activity.",
@@ -392,7 +393,7 @@ const english: Record<string, string> = {
   "Nom du label": "Label name",
   "Nom du projet": "Project name",
   "Nom du sous-dossier": "Subfolder name",
-  "Nom, couleur et position partagés avec toute l’équipe.": "Name, color and position are shared with the team.",
+  "Nom et couleur partagés avec l’équipe ; la position ne change que votre ordre.": "Name and color are shared with the team; the position only changes your order.",
   "Nom, couleur, ordre et attribution partagés avec l’équipe.": "Name, color, order and assignments are shared with the team.",
   "Noms uniques de 1 à 60 caractères et couleurs valides requis.": "Use unique names of 1–60 characters and valid colors.",
   "Non attribué": "Unassigned",
@@ -535,7 +536,14 @@ const english: Record<string, string> = {
   "Aucune action enregistrée : ni réponse, ni rangement, ni changement d’état.": "No recorded action: no reply, filing or status change.",
   "Réduire": "Show less",
   "Voir tout l’historique ({0})": "Show full history ({0})",
-  "Tri partagé avec l’équipe, appliqué à chaque niveau de sous-dossiers": "Sort shared with the team, applied at every subfolder level",
+  "Tri personnel, appliqué à chaque niveau de sous-dossiers. N’agit pas sur le serveur mail.": "Personal sort, applied at every subfolder level. Does not touch the mail server.",
+  "Code · croissant": "Code · ascending",
+  "Code · décroissant": "Code · descending",
+  "{0} lit ce mail": "{0} is reading this mail",
+  "{0} répond à ce mail": "{0} is replying to this mail",
+  "Aussi ouvert par {0}": "Also open by {0}",
+  "{0} rédige une réponse à ce mail : répondre en même temps risque un doublon.": "{0} is writing a reply to this mail: answering at the same time risks a duplicate.",
+  "Répondre quand même": "Reply anyway",
   "Traité par": "Handled by",
   "Pertinence": "Relevance",
   "Fautes et mots partiels acceptés · de:julie · pour:client · objet:devis · dans:dossier · label:urgent · est:non-lu · avec:pj · avant:2024-06 · après:2024 · \"phrase exacte\" · -exclure": "Typos and partial words accepted · from:julie · to:client · subject:quote · in:folder · label:urgent · is:unread · has:attachment · before:2024-06 · after:2024 · \"exact phrase\" · -exclude",
@@ -547,6 +555,7 @@ const english: Record<string, string> = {
 export const parseLocale = (value: unknown): Locale => value === 'en' ? 'en' : 'fr'
 
 const french: Record<string, string> = {
+  "A created or changed folder needs a name of 1 to 100 characters without / or \\, unique at its level, at most 8 levels deep.": "Un dossier créé ou modifié doit avoir un nom de 1 à 100 caractères sans / ni \\, unique à son niveau, à 8 niveaux au plus.",
   "Synchronization started": "Relève démarrée",
   "Synchronization finished in {0} s: {1} new, {2} messages in {3} folders": "Relève terminée en {0} s : {1} nouveau(x), {2} mails dans {3} dossiers",
   "Synchronization step finished in {0} s: {1} new, {2} messages in {3} folders; import continues": "Étape de relève terminée en {0} s : {1} nouveau(x), {2} mails dans {3} dossiers ; l’import continue",

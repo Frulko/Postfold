@@ -10,6 +10,7 @@ import { checkAccess } from '../shared/access.js'
 import { authMode, type Viewer } from '../shared/auth.js'
 import { KeycloakSessions } from './keycloak.js'
 import { fetchRemoteImage } from './image-proxy.js'
+import { reportPresence } from './presence.js'
 
 type AuthRequest = { headers: { authorization?: string; cookie?: string; origin?: string }; method: string; url: string; viewer?: Viewer }
 type AuthResponse = { setHeader(name: string, value: string | string[]): void; redirect(status: number, url: string): void }
@@ -58,6 +59,9 @@ class DemoController {
   @Post('conversations/activity')
   @HttpCode(200)
   activity(@Body() ids: unknown) { return this.projects.activity(ids) }
+  @Post('presence')
+  @HttpCode(200)
+  presence(@Body() input: unknown, @Req() request: AuthRequest) { return reportPresence(request.viewer, input) }
 }
 
 @Controller('authoring')
@@ -118,6 +122,7 @@ class MailboxController {
   @Put('preferences') preferences(@Body() input: unknown, @Req() request: AuthRequest) { return this.mailbox.updatePreferences(input, request.viewer) }
   @Patch('conversations/state') conversations(@Body() input: unknown, @Req() request: AuthRequest) { return this.mailbox.updateConversations(input, request.viewer) }
   @Post('conversations/activity') @HttpCode(200) activity(@Body() ids: unknown) { return this.mailbox.activity(ids) }
+  @Post('presence') @HttpCode(200) presence(@Body() input: unknown, @Req() request: AuthRequest) { return reportPresence(request.viewer, input) }
   @Post('reply') reply(@Body() input: unknown, @Req() request: AuthRequest) { return this.mailbox.reply(input, request.viewer) }
   @Get('account') account(@Req() request: AuthRequest) { return this.mailbox.accountSettings(request.viewer) }
   @Get('image') async image(@Query('url') url: string, @Res() response: { status(code: number): { end(): void }; setHeader(name: string, value: string): void; send(value: Buffer): void }) {

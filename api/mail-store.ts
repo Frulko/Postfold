@@ -9,7 +9,7 @@ import { ProjectStore } from './project-store.js'
 import { loadAccount, saveAccount } from './mail-secrets.js'
 import { isMailAccountUpdate, isMailAddress, isReplyRequest, type MailAccount, type MailAccountSettings } from '../shared/mail-account.js'
 import { isConversationUpdate, applyConversationStates } from '../shared/conversation-state.js'
-import { isProjectSettings, projectPath } from '../shared/projects.js'
+import { invalidProjectChange, isProjectSettings, projectPath } from '../shared/projects.js'
 import { fold, parseSearch, typoBudget, typoDistance } from '../shared/search.js'
 import { isMailboxQuery, type Contact, type Conversation, type ConversationState, type ConversationUpdate, type DemoMailbox, type MailboxCounts, type MailboxQuery, type MailLogEntry, type Member, type Project, type SyncProgress } from '../shared/mailbox.js'
 import { isArchiveId, isArchiveSearch, isArchiveRestore, isMessageRef, isAttachmentRef, type MailArchiveEntry, type MailArchivePage, type MessageContent } from '../shared/mail-archive.js'
@@ -1005,27 +1005,41 @@ export class MailStore extends ProjectStore {
     return this.exclusive(async () => {
       const before = await this.read()
       if (before.revision !== input.revision) throw new ConflictException({ message: 'Folder settings changed; refresh before retrying.', settings: before })
+      // Synchronized folders keep the mail server's names; only folders created or changed here follow Postfold's rules.
+      if (invalidProjectChange(before.projects, input.projects)) throw new BadRequestException('A created or changed folder needs a name of 1 to 100 characters without / or \\, unique at its level, at most 8 levels deep.')
       if (input.projects.some((project) => project.name.includes(this.delimiter))) throw new BadRequestException('Folder names cannot contain the IMAP hierarchy delimiter.')
       for (const project of input.projects) if (project.parentId && project.code === undefined) project.code = null
       const { rows: folders } = await this.pool.query<Folder>('SELECT id,path FROM mail_folders WHERE mailbox_id=$1', [this.mailboxId])
       const paths = new Map(folders.map((folder) => [folder.id, folder.path]))
-      const desired = (project: Project): string => project.id === 'inbox' ? 'INBOX' : project.parentId ? `${desired(input.projects.find((item) => item.id === project.parentId)!)}${this.delimiter}${folderName(project)}` : folderName(project)
-      if (new Set(input.projects.map(desired)).size !== input.projects.length) throw new BadRequestException('Folder paths must be unique.')
       const inbox = input.projects.find((item) => item.id === 'inbox')
       if (!inbox || inbox.parentId || inbox.name !== before.projects.find((item) => item.id === 'inbox')?.name) throw new BadRequestException('INBOX cannot be renamed, moved or deleted.')
-      const changed = input.projects.filter((project) => paths.get(project.id) !== desired(project))
       const deleted = folders.filter((folder) => !input.projects.some((item) => item.id === folder.id))
       if (deleted.length) throw new BadRequestException('Live folder deletion is disabled; review and delete it in a native mail client.')
-      if (changed.length) {
-        if (folders.some((folder) => folder.path === this.account.sentPath && changed.some((project) => project.id === folder.id))) throw new BadRequestException('The configured Sent folder cannot be renamed or deleted.')
+      // Only folders created here or whose name, parent or code was edited reach IMAP. Every other folder keeps its real
+      // path, so sorting, reordering, labels or a server-side name format never rename anything on the mail server.
+      const previous = new Map(before.projects.map((item) => [item.id, item]))
+      const byId = new Map(input.projects.map((item) => [item.id, item]))
+      const edited = input.projects.filter((project) => { const old = previous.get(project.id); return !paths.has(project.id) || !old || old.name !== project.name || (old.parentId ?? null) !== (project.parentId ?? null) || (old.code ?? null) !== (project.code ?? null) })
+      const depth = (project: Project) => { let level = 0; for (let item = project; item.parentId && level < 64; level++) item = byId.get(item.parentId)!; return level }
+      // Planned on a copy first: a path taken by another folder stops the whole change before any IMAP command.
+      const planned = new Map(paths)
+      const plan: { project: Project; from?: string; to: string }[] = []
+      for (const project of [...edited].sort((a, b) => depth(a) - depth(b))) {
+        const to = project.parentId ? `${planned.get(project.parentId)}${this.delimiter}${folderName(project)}` : folderName(project)
+        const from = planned.get(project.id)
+        if (from === to) continue
+        if ([...planned].some(([id, path]) => id !== project.id && path.toLowerCase() === to.toLowerCase())) throw new BadRequestException('Folder paths must be unique.')
+        if (from === this.account.sentPath) throw new BadRequestException('The configured Sent folder cannot be renamed or deleted.')
+        for (const [id, path] of planned) if (from && (path === from || path.startsWith(from + this.delimiter))) planned.set(id, to + path.slice(from.length))
+        planned.set(project.id, to)
+        plan.push({ project, from, to })
+      }
+      if (plan.length) {
         const client = this.imap()
         try {
           await client.connect()
-          const ordered = [...changed].sort((a, b) => desired(a).split(this.delimiter).length - desired(b).split(this.delimiter).length)
-          for (const project of ordered) {
-            const previous = paths.get(project.id)
-            const path = desired(project)
-            if (previous === path) continue
+          for (const { project, from, to: path } of plan) {
+            const previous = from
             if (previous) {
               await client.mailboxRename(previous, path)
               this.log('info', 'Renamed folder {0} to {1}', previous, path)

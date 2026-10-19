@@ -43,5 +43,7 @@ test('preferences accept only known display choices', () => {
   assert.equal(isPreferences({ displayMode: 'grid' }), false)
   assert.equal(isPreferences({ notes: [] }), false)
   assert.equal(isPreferences({ openFolders: [''] }), false)
+  assert.ok(isPreferences({ folderSort: 'code-desc', folderOrder: ['f_b', 'f_a'] }))
+  assert.equal(isPreferences({ folderSort: 'random' }), false)
   assert.deepEqual(pickPreferences({ displayMode: 'threads', listOrder: undefined }), { displayMode: 'threads' })
 })

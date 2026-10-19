@@ -18,7 +18,7 @@ export function ProjectFolders({ mailbox, opened, onOpenedChange, counts, revisi
   onSave: (input: ProjectInput, editingId: string | null, position: number | null, revision: number) => Promise<FolderFailure | null>
   onSort: (sort: ProjectSort) => void
   onDelete: (id: string, revision: number) => Promise<FolderFailure | null>
-  onReorder: (id: string, targetId: string, placement: 'before' | 'inside' | 'after') => Promise<boolean>
+  onReorder: (id: string, targetId: string, placement: 'before' | 'after') => boolean
   onMailOver: (event: DragEvent<HTMLDivElement>, id: string) => void
   onMailLeave: (event: DragEvent<HTMLDivElement>) => void
   onMailDrop: (event: DragEvent<HTMLDivElement>, id: string) => void
@@ -34,7 +34,7 @@ export function ProjectFolders({ mailbox, opened, onOpenedChange, counts, revisi
   const [expectedRevision, setExpectedRevision] = useState(revision)
   const [error, setError] = useState('')
   const [dragging, setDragging] = useState<string | null>(null)
-  const [target, setTarget] = useState<{ id: string; placement: 'before' | 'inside' | 'after' } | null>(null)
+  const [target, setTarget] = useState<{ id: string; placement: 'before' | 'after' } | null>(null)
   const dialog = useRef<HTMLDialogElement>(null)
   const codeInput = useRef<HTMLInputElement>(null)
   const nameInput = useRef<HTMLInputElement>(null)
@@ -54,14 +54,14 @@ export function ProjectFolders({ mailbox, opened, onOpenedChange, counts, revisi
   const collapsed = [...children.keys()].filter((key): key is string => !!key && !isOpen(key))
   const collapsedKey = collapsed.join('\n')
   const visible = useMemo(() => projectTree(mailbox.projects, sort, order, collapsedKey ? collapsedKey.split('\n') : [], query), [mailbox.projects, sort, order, collapsedKey, query])
-  const isInside = (id: string, ancestorId: string) => { for (let item = parents.get(id) ?? null, depth = 0; item && depth < 100; item = parents.get(item) ?? null, depth++) if (item === ancestorId) return true; return false }
   // Folder badges include subfolders. Live mailboxes send per-folder totals; the demo counts its loaded conversations.
   const totals = new Map<string, number>()
   const direct = counts ? Object.entries(counts) : [...mailbox.conversations.reduce((tally, item) => tally.set(item.projectId, (tally.get(item.projectId) ?? 0) + 1), new Map<string, number>())]
   for (const [folderId, count] of direct) for (let id: string | null = folderId, depth = 0; id && depth < 100; id = parents.get(id) ?? null, depth++) totals.set(id, (totals.get(id) ?? 0) + count)
   const siblings = children.get(input.parentId ?? null) ?? []
   const siblingCount = siblings.filter((item) => item.id !== editingId).length
-  const canReorder = sort === 'manual' && !query.trim() && !disabled
+  // Manual order is a personal view: it works offline and never reaches the mail server.
+  const canReorder = sort === 'manual' && !query.trim()
   const sharedProject = editingId ? mailbox.projects.find((item) => item.id === editingId) : undefined
 
   function toggle(id: string, open = !isOpen(id)) {
@@ -97,7 +97,7 @@ export function ProjectFolders({ mailbox, opened, onOpenedChange, counts, revisi
     <div className="folder-content" id={`${id}-folders`}>
     <div className="folder-tools">
       <div className="folder-search"><Icon name="search" /><input aria-label={t("Rechercher un dossier")} placeholder={t("Code ou nom du dossier…")} value={query} onChange={(event) => setQuery(event.target.value)} /></div>
-      <div className="folder-sort"><select aria-label={t("Trier les dossiers")} title={t("Tri partagé avec l’équipe, appliqué à chaque niveau de sous-dossiers")} value={sort} disabled={disabled} onChange={(event) => onSort(event.target.value as ProjectSort)}>{Object.entries(projectSorts).map(([key, label]) => <option key={key} value={key}>{t(label)}</option>)}</select><button className="icon-button folder-collapse-all" aria-label={t("Tout replier")} title={t("Tout replier")} disabled={!opened.length} onClick={() => onOpenedChange([])}><Icon name="collapse" /></button></div>
+      <div className="folder-sort"><select aria-label={t("Trier les dossiers")} title={t("Tri personnel, appliqué à chaque niveau de sous-dossiers. N’agit pas sur le serveur mail.")} value={sort} onChange={(event) => onSort(event.target.value as ProjectSort)}>{Object.entries(projectSorts).map(([key, label]) => <option key={key} value={key}>{t(label)}</option>)}</select><button className="icon-button folder-collapse-all" aria-label={t("Tout replier")} title={t("Tout replier")} disabled={!opened.length} onClick={() => onOpenedChange([])}><Icon name="collapse" /></button></div>
     </div>
     {sort === 'manual' && query.trim() ? <p className="folder-hint">{t("Effacez la recherche pour réordonner")}</p> : null}
     <nav className="project-nav" aria-label={t("Projets")}>
@@ -109,17 +109,17 @@ export function ProjectFolders({ mailbox, opened, onOpenedChange, counts, revisi
         return <div key={project.id} data-project-id={project.id} data-depth={depth} className={`folder-row ${currentId === project.id ? 'selected' : ''} ${dragging === project.id ? 'folder-dragging' : ''} ${target?.id === project.id ? `insert-${target.placement}` : ''} ${dropTarget === project.id ? 'drop-target' : ''} ${movingMail ? 'drop-available' : ''}`} style={{ marginLeft: depth * 14 }}
           onDragOver={(event) => {
             if (!dragged.current) { onMailOver(event, project.id); return }
-            if (!canReorder || dragged.current === project.id || isInside(project.id, dragged.current)) return
+            // Folders are only reordered among siblings; moving one into another folder is an explicit edit (parent folder).
+            if (!canReorder || dragged.current === project.id || parents.get(dragged.current) !== parents.get(project.id)) return
             event.preventDefault(); event.dataTransfer.dropEffect = 'move'
             const rect = event.currentTarget.getBoundingClientRect()
-            const ratio = (event.clientY - rect.top) / rect.height
-            setTarget({ id: project.id, placement: ratio < .25 ? 'before' : ratio > .75 ? 'after' : 'inside' })
+            setTarget({ id: project.id, placement: event.clientY - rect.top < rect.height / 2 ? 'before' : 'after' })
           }}
           onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setTarget(null); onMailLeave(event) }}
           onDrop={(event) => {
             if (!dragged.current) { onMailDrop(event, project.id); return }
             event.preventDefault()
-            if (canReorder && target?.id === project.id) { void onReorder(dragged.current, project.id, target.placement); if (target.placement === 'inside') toggle(project.id, true) }
+            if (canReorder && target?.id === project.id) onReorder(dragged.current, project.id, target.placement)
             finishDrag()
           }}>
           {sort === 'manual' ? <button className="folder-grip" draggable={canReorder} disabled={!canReorder} aria-label={t("Réordonner {0}", projectPath(mailbox.projects, project.id))} aria-describedby={`${id}-reorder-help`} title={t("Glisser, ou utiliser les flèches ↑ ↓ au clavier")}
@@ -134,7 +134,7 @@ export function ProjectFolders({ mailbox, opened, onOpenedChange, counts, revisi
               if (!canReorder || !['ArrowUp', 'ArrowDown'].includes(event.key)) return
               event.preventDefault()
               const next = siblingRows[index + (event.key === 'ArrowUp' ? -1 : 1)]
-              if (next) { keyboardHandle.current = event.currentTarget; void onReorder(project.id, next.id, event.key === 'ArrowDown' ? 'after' : 'before') }
+              if (next) { keyboardHandle.current = event.currentTarget; onReorder(project.id, next.id, event.key === 'ArrowDown' ? 'after' : 'before') }
             }}><Icon name="grip" /></button> : null}
           {hasChildren ? <button className="folder-collapse" aria-label={`${isOpen(project.id) || query.trim() ? t("Replier") : t("Déplier")} ${project.name}`} aria-expanded={isOpen(project.id) || !!query.trim()} disabled={!!query.trim()} onClick={() => toggle(project.id)}><Icon name="chevron" /></button> : <span className="folder-branch" aria-hidden="true" />}
           <button className="project-button" aria-current={currentId === project.id ? 'page' : undefined} onClick={() => onSelect(project.id)} title={projectPath(mailbox.projects, project.id)}
@@ -158,7 +158,7 @@ export function ProjectFolders({ mailbox, opened, onOpenedChange, counts, revisi
         else dialog.current!.close()
       }}>
         <header><div><span className="eyebrow">{t("Dossier de projet")}</span><h2 id={`${id}-title`}>{editingId ? t("Modifier le dossier") : t("Créer un dossier")}</h2></div><button className="icon-button" type="button" aria-label={t("Fermer")} onClick={() => dialog.current!.close()}><Icon name="close" /></button></header>
-        <p id={`${id}-description`}>{t("Nom, couleur et position partagés avec toute l’équipe.")}</p>
+        <p id={`${id}-description`}>{t("Nom et couleur partagés avec l’équipe ; la position ne change que votre ordre.")}</p>
         {!input.parentId && (!editingId || mailbox.projects.find((item) => item.id === editingId)?.code !== null) ? <label className="dialog-field" htmlFor={`${id}-code`}>{t("Code du projet")}<input id={`${id}-code`} ref={codeInput} value={input.id} required maxLength={32} readOnly={!!editingId} placeholder={t("Ex. 2401")} onChange={(event) => setInput({ ...input, id: event.target.value })} />{editingId ? <small>{t("Le code reste identique pour conserver les échanges associés.")}</small> : <small>{t("Lettres, chiffres, tirets et points. Un code unique par dossier.")}</small>}</label> : null}
         <label className="dialog-field" htmlFor={`${id}-name`}>{input.parentId ? t("Nom du sous-dossier") : t("Nom du projet")}<input id={`${id}-name`} ref={nameInput} value={input.name} required maxLength={100} placeholder={t("Ex. Infrastructure")} onChange={(event) => setInput({ ...input, name: event.target.value })} /></label>
         <label className="dialog-field">{t("Dossier parent")}<select value={input.parentId ?? ''} onChange={(event) => {

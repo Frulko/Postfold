@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, type OnApplicationShutdown } from '@nestjs/common'
 import { Pool } from 'pg'
 import { randomUUID } from 'node:crypto'
-import { isProjectSettings } from '../shared/projects.js'
+import { invalidProjectChange, isProjectSettings } from '../shared/projects.js'
 import type { Activity, ConversationState, ConversationUpdate, Member, ProjectSettings, Mailbox } from '../shared/mailbox.js'
 import { isActivityIds, isConversationUpdate, patchState } from '../shared/conversation-state.js'
 import { isPreferences, type Preferences } from '../shared/preferences.js'
@@ -78,6 +78,7 @@ export class ProjectStore implements OnApplicationShutdown {
       const { rows } = await client.query('SELECT revision, settings FROM demo_project_settings WHERE mailbox_id = $1 FOR UPDATE', [this.mailboxId])
       const previous: ProjectSettings = { revision: rows[0].revision, ...rows[0].settings, labels: rows[0].settings.labels ?? [] }
       if (previous.revision !== input.revision) throw new ConflictException({ message: 'Les réglages ont été modifiés par un collègue. Votre saisie est conservée ; vérifiez puis réessayez.', settings: previous })
+      if (invalidProjectChange(previous.projects, input.projects)) throw new BadRequestException('Un dossier créé ou modifié a un nom invalide (1 à 100 caractères, sans / ni \\), un nom déjà utilisé à son niveau ou plus de 8 niveaux.')
       const deleted = previous.projects.filter((item) => !input.projects.some((next) => next.id === item.id)).map((item) => item.id)
       if (deleted.length) {
         const { rowCount } = await client.query('SELECT 1 FROM demo_conversation_state WHERE mailbox_id = $1 AND project_id = ANY($2::text[]) LIMIT 1', [this.mailboxId, deleted])

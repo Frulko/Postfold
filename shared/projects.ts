@@ -6,7 +6,7 @@ export const projectColors = {
 }
 export const projectSorts = {
   manual: 'Ordre manuel', 'name-asc': 'Nom · A → Z', 'name-desc': 'Nom · Z → A',
-  recent: 'Création récente', oldest: 'Création ancienne', code: 'Code du projet',
+  recent: 'Création récente', oldest: 'Création ancienne', code: 'Code · croissant', 'code-desc': 'Code · décroissant',
 }
 export type ProjectSort = keyof typeof projectSorts
 export type ProjectInput = Pick<Project, 'id' | 'name' | 'color' | 'parentId'>
@@ -20,19 +20,25 @@ export function isProjectSettings(value: unknown): value is ProjectSettings {
   const ids = new Set(Array.isArray(item.projects) ? item.projects.map((project) => project?.id) : [])
   return Number.isSafeInteger(item.revision) && item.revision >= 0 &&
     typeof item.sort === 'string' && isProjectSort(item.sort) && Array.isArray(item.projects) &&
-    item.projects.length > 0 && item.projects.length <= 10_000 && item.projects.every(isProject) &&
+    item.projects.length > 0 && item.projects.length <= 10_000 && item.projects.every(isStoredProject) &&
     new Set(item.projects.map((project) => project.id.toLowerCase())).size === item.projects.length &&
-    isProjectHierarchy(item.projects) && isLabels(item.labels ?? []) &&
+    isProjectTree(item.projects) && isLabels(item.labels ?? []) &&
     Array.isArray(item.order) && item.order.length === item.projects.length &&
     new Set(item.order).size === item.order.length && item.order.every((id) => typeof id === 'string' && ids.has(id))
 }
 
+// A folder as a person names it in Postfold: trimmed, at most 100 characters, without / or \.
 export function isProject(value: unknown): value is Project {
+  return isStoredProject(value) && value.name === value.name.trim() && value.name.length <= 100 && !/[/\\]/.test(value.name)
+}
+
+// A folder as stored: the names of synchronized IMAP folders are kept as the mail server has them.
+export function isStoredProject(value: unknown): value is Project {
   if (!value || typeof value !== 'object') return false
   const item = value as Project
   return typeof item.id === 'string' && /^[a-z0-9][a-z0-9._-]{0,31}$/i.test(item.id) &&
-    typeof item.name === 'string' && item.name === item.name.trim() && item.name.length > 0 && item.name.length <= 100 &&
-    !/[\u0000-\u001f/\\]/.test(item.name) && typeof item.color === 'string' && isProjectColor(item.color) &&
+    typeof item.name === 'string' && item.name.trim().length > 0 && item.name.length <= 255 &&
+    !/[\u0000-\u001f]/.test(item.name) && typeof item.color === 'string' && isProjectColor(item.color) &&
     (item.parentId === undefined || item.parentId === null || (typeof item.parentId === 'string' && item.parentId.length > 0)) &&
     (item.code === undefined || item.code === null || (typeof item.code === 'string' && /^[a-z0-9][a-z0-9._-]{0,31}$/i.test(item.code))) &&
     (item.createdAt === undefined || (typeof item.createdAt === 'string' && Number.isFinite(Date.parse(item.createdAt))))
@@ -45,7 +51,7 @@ export function prepareProject(input: ProjectInput, projects: Project[], editing
     createdAt: editingId ? previous?.createdAt : new Date().toISOString() }
   if (!isProject(project)) throw new Error('Indiquez un code valide, un nom de 1 à 100 caractères sans / ni \\, et une couleur valide.')
   if (projects.some((item) => item.id !== editingId && item.id.toLowerCase() === project.id.toLowerCase())) throw new Error('Ce code de projet existe déjà.')
-  if (!isProjectHierarchy([...projects.filter((item) => item.id !== editingId), project])) throw new Error('Parent invalide, nom déjà utilisé ou profondeur maximale de 8 dossiers atteinte.')
+  if (!isProjectChange([...projects.filter((item) => item.id !== editingId), project], project)) throw new Error('Parent invalide, nom déjà utilisé ou profondeur maximale de 8 dossiers atteinte.')
   return project
 }
 
@@ -55,25 +61,42 @@ export function isLabels(value: unknown): value is Label[] {
     new Set(value.map((item) => item.id)).size === value.length && new Set(value.map((item) => item.name.toLocaleLowerCase('fr'))).size === value.length
 }
 
-export function isProjectHierarchy(projects: Project[]) {
+// Every parent exists and no folder is its own ancestor. Depth and sibling names are the mail server's business
+// for synchronized folders; isProjectChange applies Postfold's own rules to the folders a person edits.
+export function isProjectTree(projects: Project[]) {
   const byId = new Map(projects.map((item) => [item.id, item]))
-  const siblings = new Set<string>()
   return projects.every((project) => {
-    if (project.parentId) {
-      const key = `${project.parentId}/${project.name.toLocaleLowerCase('fr')}`
-      if (siblings.has(key)) return false
-      siblings.add(key)
-    }
     let item: Project | undefined = project
-    const seen = new Set<string>()
-    while (item) {
-      if (seen.has(item.id) || seen.size >= 8) return false
-      seen.add(item.id)
-      if (!item.parentId) return true
+    for (let depth = 0; item?.parentId; depth++) {
+      if (depth >= 64) return false
       item = byId.get(item.parentId)
-      if (!item) return false
+      if (!item || item.id === project.id) return false
     }
-    return false
+    return !!item
+  })
+}
+
+// A created, renamed or moved folder: at most 8 levels deep and no sibling with the same name (ignoring case).
+export function isProjectChange(projects: Project[], project: Project) {
+  const byId = new Map(projects.map((item) => [item.id, item]))
+  byId.set(project.id, project)
+  let depth = 1
+  for (let item = project; item.parentId; depth++) {
+    const parent = byId.get(item.parentId)
+    if (!parent || parent.id === project.id || depth >= 8) return false
+    item = parent
+  }
+  const name = project.name.toLocaleLowerCase('fr')
+  return ![...byId.values()].some((item) => item.id !== project.id && (item.parentId ?? null) === (project.parentId ?? null) && !!project.parentId && item.name.toLocaleLowerCase('fr') === name)
+}
+
+// The first folder created or changed in `next` that breaks the naming rules; unchanged IMAP folders are not judged.
+export function invalidProjectChange(previous: Project[], next: Project[]) {
+  const before = new Map(previous.map((item) => [item.id, item]))
+  return next.find((project) => {
+    const old = before.get(project.id)
+    const changed = !old || old.name !== project.name || (old.parentId ?? null) !== (project.parentId ?? null) || (old.code ?? null) !== (project.code ?? null)
+    return changed && (!isProject(project) || !isProjectChange(next, project))
   })
 }
 
@@ -125,7 +148,7 @@ export function sortProjects(projects: Project[], sort: ProjectSort, order: stri
   // Subfolders have no project code: they sort by name. Ties (IMAP folders share their first sync date) fall back to the name.
   const code = (item: Project) => item.parentId || item.code === null ? item.name : item.code ?? item.id
   return manual.sort((a, b) => {
-    if (sort === 'code') return compare(code(a), code(b)) || compare(a.name, b.name) || compare(a.id, b.id)
+    if (sort === 'code' || sort === 'code-desc') return (compare(code(a), code(b)) || compare(a.name, b.name) || compare(a.id, b.id)) * (sort === 'code-desc' ? -1 : 1)
     if (sort === 'name-asc' || sort === 'name-desc') return (compare(a.name, b.name) || compare(a.id, b.id)) * (sort === 'name-desc' ? -1 : 1)
     const dates = (a.createdAt ? Date.parse(a.createdAt) : 0) - (b.createdAt ? Date.parse(b.createdAt) : 0)
     return dates * (sort === 'recent' ? -1 : 1) || compare(a.name, b.name) || compare(a.id, b.id)

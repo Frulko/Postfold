@@ -109,6 +109,14 @@ try {
   native.on('error', () => {})
   try {
     await native.connect()
+    // A folder named on the mail server without Postfold's "CODE - Name" format, with irregular spacing and a trailing space,
+    // must survive sorting, labels and other folder saves untouched: only folders edited in Postfold reach IMAP.
+    for (const path of ['77  -  Odd   name ', 'Devis 2024 ']) await native.mailboxCreate(path)
+    mailbox = await store.sync()
+    settings = { ...mailbox.projectSettings, projects: mailbox.projects }
+    settings = await store.update({ ...settings, sort: 'name-desc', labels: [...settings.labels, { id: 'later', name: 'Later', color: 'blue' }] })
+    const serverPaths = (await native.list()).map((folder) => folder.path)
+    for (const path of ['77  -  Odd   name ', 'Devis 2024 ']) assert.ok(serverPaths.includes(path), `Folder ${JSON.stringify(path)} must not be renamed by a save that did not edit it`)
     const listed = await native.list()
     const delimiter = listed.find((folder) => folder.path === 'INBOX').delimiter
     const destinationPath = `1842 - Support requests${delimiter}VPN`
