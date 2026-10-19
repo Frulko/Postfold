@@ -21,6 +21,10 @@ const sourceHash = (value: Buffer) => createHash('sha256').update(value).digest(
 const emptyMailbox = { projects: [{ id: 'inbox', name: 'INBOX', color: 'blue', code: null }], contacts: [], conversations: [] }
 const stateSnapshot = "jsonb_build_object('id',s.id,'revision',s.revision,'unread',s.unread,'status',s.status,'projectId',s.project_id,'labelIds',s.label_ids,'assigneeId',s.assignee_id)"
 const slot = (path: string, validity: string, uid: number) => JSON.stringify([path, validity, uid])
+// PostgreSQL text/jsonb reject NUL characters and lone UTF-16 surrogates (an emoji cut by a preview slice, a broken
+// header encoding); one such message used to abort every sync cycle. Lone surrogates become U+FFFD.
+const cleanText = (value: string) => value.replace(/\u0000/g, '').replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD')
+export const jsonSafe = <T>(value: T): T => JSON.parse(JSON.stringify(value, (_key, item: unknown) => typeof item === 'string' ? cleanText(item) : item))
 // IMAP/SMTP errors carry a code and the server's response text, never the credentials.
 const describeError = (error: unknown) => { const item = error as { code?: string; responseText?: string; message?: string } | undefined
   return [item?.code, item?.responseText ?? item?.message].filter(Boolean).join(' · ').slice(0, 300) || 'Unknown error' }
@@ -395,6 +399,7 @@ export class MailStore extends ProjectStore {
         }
       } finally { lock.release() }
     }
+    this.log('info', 'Inventory: {0} messages in {1} folders', inventory.length, folders.length)
     const indexedInventory = new Map(inventory.map(item => [slot(item.path,item.validity,item.message.uid),item]))
     const liveSlots = new Set(indexedInventory.keys())
     const staged: CachedMessage[] = []
@@ -405,6 +410,7 @@ export class MailStore extends ProjectStore {
       const uncached = items.filter((item) => !bySlot.get(slot(item.path, item.validity, item.message.uid))?.source_sha256 && (item.message.size ?? 0) <= MAX_MIME_BYTES)
       const missing = uncached.slice(-this.limit)
       importPending ||= uncached.length > missing.length
+      if (missing.length) this.log('info', 'Folder {0}: importing {1} of {2} new messages ({3} in folder)', folder.path, missing.length, uncached.length, items.length)
       const raw = new Map<number, Buffer>()
       if (missing.length) {
         const lock = await client.getMailboxLock(folder.path)
@@ -423,45 +429,51 @@ export class MailStore extends ProjectStore {
         const source = raw.get(item.message.uid)
         // Oversized MIME messages are not downloaded; importing them later cannot consume unbounded RAM.
         if (!source) { if (previous) staged.push(previous); continue }
-        const sha = sourceHash(source)
-        const restoring = !restorationClaimed && restoration?.sha256 === sha ? restoration : undefined
-        const { rows: archived } = await this.pool.query<{ message_id: string; snapshot: ConversationState; data: CachedMessage['data'] }>(`SELECT message_id,snapshot,data FROM mail_archives a
-          WHERE mailbox_id=$1 AND sha256=$2 AND NOT (message_id=ANY($3::text[]))
-          AND NOT EXISTS (SELECT 1 FROM mail_messages m WHERE m.mailbox_id=a.mailbox_id AND m.id=a.message_id)
-          ORDER BY (restore_status IS NOT NULL) DESC,last_seen_at DESC,id DESC LIMIT 1`, [this.mailboxId, sha, [...claimedArchiveIds]])
-        const parsed = await simpleParser(source, { skipTextToHtml: true })
-        const sender = parsed.from?.value[0]
-        const outgoing = sender?.address?.toLowerCase() === this.account.email.toLowerCase()
-        const recipient = outgoing ? (Array.isArray(parsed.to) ? parsed.to[0] : parsed.to)?.value[0] : parsed.replyTo?.value[0] ?? sender
-        const email = recipient?.address ?? ''
-        // Visible headers only: never expose Bcc as a conversation participant.
-        const addresses = [parsed.from, parsed.to, parsed.cc, parsed.replyTo].flatMap((header) => !header ? [] :
-          Array.isArray(header) ? header.flatMap((group) => group.value) : header.value)
-        const participants = [...new Map(addresses.filter((person) => isMailAddress(person.address) && person.address.toLowerCase() !== this.account.email.toLowerCase())
-          .map((person) => [person.address!.toLowerCase(), { name: person.name || person.address!, email: person.address! }])).values()]
-        const rawId = parsed.messageId ?? null
-        const moved = oldMessages.filter((row) => rawId && row.raw_id === rawId && !liveSlots.has(slot(row.path, row.validity, Number(row.uid))) && !staged.some((next) => next.id === row.id))
-        const references = [...(typeof parsed.references === 'string' ? [parsed.references] : parsed.references ?? []), ...(parsed.inReplyTo ? [parsed.inReplyTo] : [])]
-        const date = parsed.date && Number.isFinite(parsed.date.getTime()) ? parsed.date : new Date(item.message.internalDate || Date.now())
-        const sentAt = date.toISOString()
-        const body = parsed.text ?? ''
-        const sentCopy = rawId && outgoing ? sent.find((item) => item.data.messageId === rawId)?.data : undefined
-        const sentId = sentCopy && !staged.some((row) => row.id === sentCopy.id) && !oldMessages.some((row) => row.id === sentCopy.id && liveSlots.has(slot(row.path, row.validity, Number(row.uid)))) ? sentCopy.id : undefined
-        const restoredId = restoring && !oldMessages.some(row => row.id === restoring.message_id && liveSlots.has(slot(row.path,row.validity,Number(row.uid)))) ? restoring.message_id : undefined
-        const data: CachedMessage['data'] = { id: previous?.id ?? sentId ?? restoredId ?? (moved.length === 1 ? moved[0].id : archived[0]?.message_id ?? randomUUID()), projectId: id, contactId: `c_${hash(email.toLowerCase())}`,
-          threadId: sentCopy?.threadId ?? previous?.data.threadId ?? restoring?.data.threadId ?? archived[0]?.data.threadId ?? hash(references[0] ?? parsed.inReplyTo ?? rawId ?? randomUUID()), sentAt,
-          sender: { name: sender?.name || sender?.address || 'Unknown sender', email: sender?.address ?? '' },
-          participants,
-          subject: parsed.subject ?? '(No subject)', preview: body.replace(/\s+/g, ' ').slice(0, 200), body,
-          time: sentAt.slice(0, 10), status: outgoing ? 'waiting' : 'open', assignee: null, unread, labelIds: [], outgoing, imapReady: true, replyTo: email, references,
-          receivedAt: new Date(item.message.internalDate || date).toISOString(), ...(rawId ? { messageId: rawId } : {}) }
-        if (restoring) { restorationClaimed = true; restoredStates.set(data.id,restoring.snapshot) }
-        else if (archived[0]?.message_id === data.id) restoredStates.set(data.id, archived[0].snapshot)
-        claimedArchiveIds.add(data.id)
-        const row = { id: data.id, path: item.path, validity: item.validity, uid: item.message.uid, raw_id: rawId, data, source_sha256: sha }
-        await this.archiveMessage(row, source, [...(item.message.flags ?? [])], new Date(item.message.internalDate || date), currentStates.get(data.id) ?? restoredStates.get(data.id))
-        imported++
-        staged.push(row)
+        try {
+          const sha = sourceHash(source)
+          const restoring = !restorationClaimed && restoration?.sha256 === sha ? restoration : undefined
+          const { rows: archived } = await this.pool.query<{ message_id: string; snapshot: ConversationState; data: CachedMessage['data'] }>(`SELECT message_id,snapshot,data FROM mail_archives a
+            WHERE mailbox_id=$1 AND sha256=$2 AND NOT (message_id=ANY($3::text[]))
+            AND NOT EXISTS (SELECT 1 FROM mail_messages m WHERE m.mailbox_id=a.mailbox_id AND m.id=a.message_id)
+            ORDER BY (restore_status IS NOT NULL) DESC,last_seen_at DESC,id DESC LIMIT 1`, [this.mailboxId, sha, [...claimedArchiveIds]])
+          const parsed = await simpleParser(source, { skipTextToHtml: true })
+          const sender = parsed.from?.value[0]
+          const outgoing = sender?.address?.toLowerCase() === this.account.email.toLowerCase()
+          const recipient = outgoing ? (Array.isArray(parsed.to) ? parsed.to[0] : parsed.to)?.value[0] : parsed.replyTo?.value[0] ?? sender
+          const email = recipient?.address ?? ''
+          // Visible headers only: never expose Bcc as a conversation participant.
+          const addresses = [parsed.from, parsed.to, parsed.cc, parsed.replyTo].flatMap((header) => !header ? [] :
+            Array.isArray(header) ? header.flatMap((group) => group.value) : header.value)
+          const participants = [...new Map(addresses.filter((person) => isMailAddress(person.address) && person.address.toLowerCase() !== this.account.email.toLowerCase())
+            .map((person) => [person.address!.toLowerCase(), { name: person.name || person.address!, email: person.address! }])).values()]
+          const rawId = parsed.messageId ? cleanText(parsed.messageId) : null
+          const moved = oldMessages.filter((row) => rawId && row.raw_id === rawId && !liveSlots.has(slot(row.path, row.validity, Number(row.uid))) && !staged.some((next) => next.id === row.id))
+          const references = [...(typeof parsed.references === 'string' ? [parsed.references] : parsed.references ?? []), ...(parsed.inReplyTo ? [parsed.inReplyTo] : [])]
+          const date = parsed.date && Number.isFinite(parsed.date.getTime()) ? parsed.date : new Date(item.message.internalDate || Date.now())
+          const sentAt = date.toISOString()
+          const body = parsed.text ?? ''
+          const sentCopy = rawId && outgoing ? sent.find((item) => item.data.messageId === rawId)?.data : undefined
+          const sentId = sentCopy && !staged.some((row) => row.id === sentCopy.id) && !oldMessages.some((row) => row.id === sentCopy.id && liveSlots.has(slot(row.path, row.validity, Number(row.uid)))) ? sentCopy.id : undefined
+          const restoredId = restoring && !oldMessages.some(row => row.id === restoring.message_id && liveSlots.has(slot(row.path,row.validity,Number(row.uid)))) ? restoring.message_id : undefined
+          const data: CachedMessage['data'] = jsonSafe({ id: previous?.id ?? sentId ?? restoredId ?? (moved.length === 1 ? moved[0].id : archived[0]?.message_id ?? randomUUID()), projectId: id, contactId: `c_${hash(email.toLowerCase())}`,
+            threadId: sentCopy?.threadId ?? previous?.data.threadId ?? restoring?.data.threadId ?? archived[0]?.data.threadId ?? hash(references[0] ?? parsed.inReplyTo ?? rawId ?? randomUUID()), sentAt,
+            sender: { name: sender?.name || sender?.address || 'Unknown sender', email: sender?.address ?? '' },
+            participants,
+            subject: parsed.subject ?? '(No subject)', preview: body.replace(/\s+/g, ' ').slice(0, 200), body,
+            time: sentAt.slice(0, 10), status: outgoing ? 'waiting' : 'open', assignee: null, unread, labelIds: [], outgoing, imapReady: true, replyTo: email, references,
+            receivedAt: new Date(item.message.internalDate || date).toISOString(), ...(rawId ? { messageId: rawId } : {}) })
+          if (restoring) { restorationClaimed = true; restoredStates.set(data.id,restoring.snapshot) }
+          else if (archived[0]?.message_id === data.id) restoredStates.set(data.id, archived[0].snapshot)
+          claimedArchiveIds.add(data.id)
+          const row = { id: data.id, path: item.path, validity: item.validity, uid: item.message.uid, raw_id: rawId, data, source_sha256: sha }
+          await this.archiveMessage(row, source, [...(item.message.flags ?? [])], new Date(item.message.internalDate || date), currentStates.get(data.id) ?? restoredStates.get(data.id))
+          imported++
+          staged.push(row)
+        } catch (error) {
+          // One unreadable message is reported and retried next cycle instead of blocking the whole import.
+          this.log('warn', 'Skipped message UID {0} in {1}: {2}', item.message.uid, item.path, describeError(error))
+          if (previous) staged.push(previous)
+        }
       }
     }
     if (importPending) {
@@ -657,7 +669,7 @@ export class MailStore extends ProjectStore {
       const outgoing: CachedMessage['data'] = { ...message, id: `sent_${input.requestId}`, messageId, outgoing: true, imapReady: false,
         subject: /^re:/i.test(message.subject) ? message.subject : `Re: ${message.subject}`, sentAt: date.toISOString(), time: date.toISOString().slice(0, 10),
         participants: [{ name: message.participants?.find(person => person.email.toLowerCase() === message.replyTo!.toLowerCase())?.name ?? message.replyTo, email: message.replyTo }],
-        sender: { name: this.account.name || this.account.email, email: this.account.email }, preview: input.text.replace(/\s+/g, ' ').slice(0, 200), body: input.text, unread: false }
+        sender: { name: this.account.name || this.account.email, email: this.account.email }, preview: cleanText(input.text.replace(/\s+/g, ' ').slice(0, 200)), body: input.text, unread: false }
       const generated = await nodemailer.createTransport({ streamTransport: true, buffer: true }).sendMail({
         from: { name: this.account.name, address: this.account.email }, to: message.replyTo, subject: outgoing.subject, text: input.text, html, attachments: input.attachments?.map(a => ({ filename: a.filename, contentType: a.contentType, content: Buffer.from(a.content, 'base64') })), date, messageId,
         inReplyTo: message.messageId, references: [...(message.references ?? []), ...(message.messageId ? [message.messageId] : [])],

@@ -219,3 +219,16 @@ test('authoring persists templates and safe HTML signatures with ownership, revi
     try { await pool.query('DELETE FROM demo_project_settings WHERE mailbox_id=$1', [mailboxId]) } finally { await pool.end() }
   }
 })
+
+test('message data stays valid PostgreSQL JSON when a preview cuts an emoji or a header contains NUL', async () => {
+  const { jsonSafe } = await import('./mail-store.js')
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL ?? 'postgresql://mailer_demo:mailer_demo@127.0.0.1:55432/mailer_support' })
+  try {
+    const data = { preview: `${'x'.repeat(199)}😀`.slice(0, 200), subject: 'a\u0000b', participants: [{ name: 'Paul \uDE00' }], keep: 'ok 😀 é' }
+    await assert.rejects(pool.query('SELECT $1::jsonb', [data]), /invalid input syntax for type json/)
+    const { rows } = await pool.query('SELECT $1::jsonb AS value', [jsonSafe(data)])
+    assert.equal(rows[0].value.preview.at(-1), '�')
+    assert.equal(rows[0].value.subject, 'ab')
+    assert.equal(rows[0].value.keep, 'ok 😀 é')
+  } finally { await pool.end() }
+})
