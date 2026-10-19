@@ -23,7 +23,7 @@ Outgoing replies have their generated MIME saved in `mail_sends` before SMTP beg
 
 - Capture occurs during successful synchronization, including the backend's 30-second polling. A message deleted before its first capture cannot be recovered.
 - Complete MIME messages are limited to **16 MiB**. Larger incoming messages are skipped; oversized outgoing replies are rejected before sending.
-- By default, up to **200 bodies per folder per cycle** are fetched, newest first. Existing cached messages without MIME are backfilled over subsequent cycles. The archive page reports cached messages still awaiting their complete copy.
+- By default, up to **200 bodies per cycle across all folders** are fetched, newest first. Existing cached messages without MIME are backfilled over subsequent cycles. The archive page reports cached messages still awaiting their complete copy.
 - There is **no automatic purge** and no automatic restoration of external deletions. Plan storage capacity; the displayed MIME size is logical payload size, not total PostgreSQL disk usage.
 - Browser-local contact notes, drafts and draft files are outside the database archive. This feature does not turn them into shared CRM records.
 

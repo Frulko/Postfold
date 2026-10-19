@@ -36,7 +36,7 @@ export class MailStore extends ProjectStore {
   private lastSync: string | null = null
   private syncError = false
   private delimiter = '/'
-  private readonly limit = Math.max(1, Math.min(1000, Number(process.env.MAILBOX_SYNC_LIMIT) || 200))
+  private readonly limit = Math.max(1, Math.min(5000, Number(process.env.MAILBOX_SYNC_LIMIT) || 200))
   // ponytail: in-memory ring buffer, lost on restart; the stdout copy keeps the history in container logs.
   private logs: MailLogEntry[] = []
   private logSeq = 0
@@ -402,15 +402,20 @@ export class MailStore extends ProjectStore {
     this.log('info', 'Inventory: {0} messages in {1} folders', inventory.length, folders.length)
     const indexedInventory = new Map(inventory.map(item => [slot(item.path,item.validity,item.message.uid),item]))
     const liveSlots = new Set(indexedInventory.keys())
+    // The limit is a budget for the whole cycle, newest first, so large mailboxes become visible and committed batch by batch.
+    const uncached = inventory.filter((item) => !bySlot.get(slot(item.path, item.validity, item.message.uid))?.source_sha256 && (item.message.size ?? 0) <= MAX_MIME_BYTES)
+    const received = (item: typeof inventory[number]) => new Date(item.message.internalDate ?? 0).getTime()
+    const selected = new Set(uncached.sort((a, b) => received(b) - received(a)).slice(0, this.limit))
+    const importPending = uncached.length > selected.size
+    if (uncached.length) this.log('info', 'Importing {0} of {1} new messages', selected.size, uncached.length)
     const staged: CachedMessage[] = []
-    let importPending = false
+    const stagedIds = new Set<string>()
+    const unchanged = new Set<string>()
     let imported = 0
     for (const { folder, id } of folders) {
       const items = inventory.filter((item) => item.path === folder.path)
-      const uncached = items.filter((item) => !bySlot.get(slot(item.path, item.validity, item.message.uid))?.source_sha256 && (item.message.size ?? 0) <= MAX_MIME_BYTES)
-      const missing = uncached.slice(-this.limit)
-      importPending ||= uncached.length > missing.length
-      if (missing.length) this.log('info', 'Folder {0}: importing {1} of {2} new messages ({3} in folder)', folder.path, missing.length, uncached.length, items.length)
+      const missing = items.filter((item) => selected.has(item))
+      if (missing.length) this.log('info', 'Folder {0}: importing {1} new messages ({2} in folder)', folder.path, missing.length, items.length)
       const raw = new Map<number, Buffer>()
       if (missing.length) {
         const lock = await client.getMailboxLock(folder.path)
@@ -424,11 +429,14 @@ export class MailStore extends ProjectStore {
       for (const item of items) {
         const previous = bySlot.get(slot(item.path, item.validity, item.message.uid))
         const unread = !item.message.flags?.has('\\Seen')
-        if (previous && (previous.source_sha256 || !missing.includes(item))) { staged.push({ ...previous, data: { ...previous.data, unread, projectId: id } }); continue }
-        if (!missing.includes(item)) continue
+        if (previous && (previous.source_sha256 || !selected.has(item))) {
+          if (previous.data.unread === unread && previous.data.projectId === id) unchanged.add(previous.id)
+          staged.push({ ...previous, data: { ...previous.data, unread, projectId: id } }); stagedIds.add(previous.id); continue
+        }
+        if (!selected.has(item)) continue
         const source = raw.get(item.message.uid)
         // Oversized MIME messages are not downloaded; importing them later cannot consume unbounded RAM.
-        if (!source) { if (previous) staged.push(previous); continue }
+        if (!source) { if (previous) { staged.push(previous); stagedIds.add(previous.id); unchanged.add(previous.id) } continue }
         try {
           const sha = sourceHash(source)
           const restoring = !restorationClaimed && restoration?.sha256 === sha ? restoration : undefined
@@ -468,18 +476,18 @@ export class MailStore extends ProjectStore {
           const row = { id: data.id, path: item.path, validity: item.validity, uid: item.message.uid, raw_id: rawId, data, source_sha256: sha }
           await this.archiveMessage(row, source, [...(item.message.flags ?? [])], new Date(item.message.internalDate || date), currentStates.get(data.id) ?? restoredStates.get(data.id))
           imported++
-          staged.push(row)
+          staged.push(row); stagedIds.add(row.id)
         } catch (error) {
           // One unreadable message is reported and retried next cycle instead of blocking the whole import.
           this.log('warn', 'Skipped message UID {0} in {1}: {2}', item.message.uid, item.path, describeError(error))
-          if (previous) staged.push(previous)
+          if (previous) { staged.push(previous); stagedIds.add(previous.id); unchanged.add(previous.id) }
         }
       }
     }
     if (importPending) {
       // Preserve annotations on native moves larger than one import batch until their new UIDs are parsed.
-      for (const previous of oldMessages) if (!staged.some((row) => row.id === previous.id)) {
-        staged.push(previous)
+      for (const previous of oldMessages) if (!stagedIds.has(previous.id)) {
+        staged.push(previous); stagedIds.add(previous.id); unchanged.add(previous.id)
         const project = oldSettings.projects.find((item) => item.id === previous.data.projectId)
         if (project && !projects.some((item) => item.id === project.id)) projects.push(project)
       }
@@ -501,6 +509,8 @@ export class MailStore extends ProjectStore {
       await transaction.query('DELETE FROM mail_messages WHERE mailbox_id = $1 AND NOT (id = ANY($2::text[]))', [this.mailboxId, keep])
       await transaction.query('DELETE FROM demo_conversation_state WHERE mailbox_id = $1 AND NOT (id = ANY($2::text[])) AND id NOT LIKE $3', [this.mailboxId, keep, 'sent_%'])
       for (const row of staged) {
+        // Rewriting tens of thousands of identical rows every cycle would dominate large mailboxes.
+        if (unchanged.has(row.id)) continue
         await transaction.query(`INSERT INTO mail_messages (mailbox_id, id, path, validity, uid, raw_id, data,source_sha256) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
           ON CONFLICT (mailbox_id,id) DO UPDATE SET path=EXCLUDED.path, validity=EXCLUDED.validity, uid=EXCLUDED.uid, raw_id=EXCLUDED.raw_id, data=EXCLUDED.data,source_sha256=EXCLUDED.source_sha256`,
         [this.mailboxId, row.id, row.path, row.validity, row.uid, row.raw_id, row.data, row.source_sha256 ?? null])

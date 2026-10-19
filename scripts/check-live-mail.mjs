@@ -86,7 +86,7 @@ try {
   assert.equal(mailbox.connection.error, false)
   assert.equal(mailbox.conversations.length, 1)
   const received = mailbox.conversations[0]
-  assert.equal(received.body.trim(), 'Please help with my VPN.')
+  assert.equal((await store.messageContent(received.id)).text.trim(), 'Please help with my VPN.')
   assert.equal(received.unread, true)
   assert.deepEqual(received.participants.map(person => person.email).sort(), ['customer@postfold.test', 'manager@postfold.test', 'platform@postfold.test'])
   assert.equal(mailbox.contacts.find(person => person.email === 'platform@postfold.test').name, 'Platform')
@@ -186,7 +186,7 @@ try {
   await assert.rejects(store.reply({ ...reply, requestId: randomUUID() }))
   assert.deepEqual((await store.mailbox()).conversations.find(item => item.outgoing).participants.map(person => person.email), ['customer@postfold.test'], 'A direct reply must not claim the original Cc received it')
   mailbox = await store.sync()
-  assert.ok(mailbox.conversations.some((item) => item.outgoing && item.body.trim() === reply.text))
+  assert.ok(mailbox.conversations.some((item) => item.outgoing && item.preview === reply.text.replace(/\s+/g, ' ').slice(0, 200)))
   assert.equal(mailbox.deliveries[0].status, 'sent')
   assert.equal(mailbox.deliveries[0].sentCopy, true)
   assert.equal(mailbox.conversations.filter((item) => item.outgoing).length, 1)
@@ -203,7 +203,7 @@ try {
   assert.equal(mailbox.conversations.find((item) => item.outgoing).assigneeId, supportActor.id)
   await smtp.sendMail({ from: 'customer@postfold.test', to: account.email, subject: 'Re: VPN access request', text: 'Thanks, I have another question.', messageId: `<${randomUUID()}@postfold.test>`, inReplyTo: originalId, references: [originalId] })
   mailbox = await store.sync()
-  assert.equal(mailbox.conversations.find((item) => item.body.includes('another question')).assigneeId, supportActor.id, 'New messages in an existing thread must inherit assignment')
+  assert.equal(mailbox.conversations.find((item) => item.preview.includes('another question')).assigneeId, supportActor.id, 'New messages in an existing thread must inherit assignment')
   const recipient = new ImapFlow({ host: 'localhost', port: imapPort, secure: true, auth: { user: 'customer', pass: 'test-only-customer-password' }, tls, logger: false })
   recipient.on('error', () => {})
   try {
