@@ -306,6 +306,8 @@ const english: Record<string, string> = {
   "Brouillon enregistré dans ce navigateur. Aucun email envoyé.": "Draft saved in this browser. No email sent.",
   "Carnet d’adresses": "Address book",
   "Ce dossier est vide": "This folder is empty",
+  "Aucun mail ouvert": "No mail open",
+  "Choisissez un mail dans la liste pour le lire.": "Pick a mail in the list to read it.",
   "Changer l’état des conversations sélectionnées": "Change selected conversation status",
   "Changer l’état…": "Change status…",
   "Charger cette version": "Load this version",

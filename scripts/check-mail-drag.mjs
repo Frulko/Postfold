@@ -69,7 +69,7 @@ try {
   const quoteTarget = original.conversations.find(x => x.id === 'quote').projectId === '1842' ? '2056' : '1842'
   await drag('quote', quoteTarget, 1)
   assert.equal(placements().quote, quoteTarget)
-  assert.equal(evaluate('document.querySelector(".reading-pane h2").textContent'), original.conversations.find(x=>x.id==='plans').subject, 'Dragging must not open the mail')
+  assert.equal(evaluate('document.querySelector(".reading-pane h2").textContent'), 'No mail open', 'Dragging must not open the mail')
   check('plans'); check('delivery')
   const batchTarget = original.conversations.filter(x=>['plans','delivery'].includes(x.id)).every(x=>x.projectId==='2170') ? '1842' : '2170'
   await drag('plans', batchTarget, 2)

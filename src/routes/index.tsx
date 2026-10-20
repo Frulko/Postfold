@@ -108,7 +108,7 @@ function MailboxPage() {
   const [view, setView] = useState<'mail' | 'contacts' | 'settings'>('mail')
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('templates')
   const [status, setStatus] = useState('all')
-  const [selectedId, setSelectedId] = useState(initialMailbox.conversations[0]?.id ?? '')
+  const [selectedId, setSelectedId] = useState('')
   const [contactId, setContactId] = useState(initialMailbox.contacts[0]?.id ?? '')
   const [inspectedContact, setInspectedContact] = useState<{ threadId: string; id: string } | null>(null)
   const [sendBusy, setSendBusy] = useState(false)
@@ -294,7 +294,7 @@ function MailboxPage() {
   const marked = (text: string) => highlightParts(text, highlights).map((part, index) => part.mark ? <mark key={index}>{part.text}</mark> : part.text)
   const [searchHelp, setSearchHelp] = useState(false)
   const rows = mailboxRows(conversations, displayMode, rowOrder)
-  const conversation = mailbox.conversations.find((item) => item.id === selectedId) ?? mailbox.conversations[0] ?? { id: '', projectId: '', contactId: '', subject: '', preview: '', body: '', time: '', status: 'open' as const, assignee: null, unread: false }
+  const conversation = mailbox.conversations.find((item) => item.id === selectedId) ?? { id: '', projectId: '', contactId: '', subject: '', preview: '', body: '', time: '', status: 'open' as const, assignee: null, unread: false }
   const replyContact = mailbox.contacts.find((item) => item.id === conversation.contactId) ?? mailbox.contacts[0] ?? { id: '', name: '', email: '', company: '', phone: '' }
   const project = mailbox.projects.find((item) => item.id === conversation.projectId) ?? mailbox.projects[0]
   const selectedProject = mailbox.projects.find((item) => item.id === projectId)
@@ -321,7 +321,7 @@ function MailboxPage() {
       acceptMailbox(fresh)
       // The open conversation follows the new filters unless a reply is being written.
       const visible = mailboxRows(filtered(fresh), displayMode, rowOrder)
-      if (view === 'mail' && !composerOpen && !visible.some((row) => row.messageIds.includes(selectedId))) setSelectedId((displayMode === 'threads' ? visible[0]?.messageIds.at(-1) : visible[0]?.id) ?? '')
+      if (view === 'mail' && !composerOpen && !visible.some((row) => row.messageIds.includes(selectedId))) setSelectedId('')
     }).catch((error) => { if (active) { setConversationFailed(true); setConversationFeedback(listError(error)) } })
       .finally(() => { if (active) setListBusy(false) })
     return () => { active = false }
@@ -359,7 +359,7 @@ function MailboxPage() {
   const readingIds = threadMessages.map((item) => item.id)
   const matchingProjects = suggestProjects(mailbox.projects, threadMessages)
   const filingSuggestions = matchingProjects.filter((target) => threadMessages.some((item) => item.projectId !== target.id))
-  const showConversation = mailbox.conversations.length > 0 && (!projectId || filterConversations(mailbox, projectId, '').some((item) => readingIds.includes(item.id)))
+  const showConversation = !!conversation.id && (!projectId || filterConversations(mailbox, projectId, '').some((item) => readingIds.includes(item.id)))
   const delivery = mailbox.deliveries?.find((item) => item.targetId === conversation.id)
   // Colleagues with a mail open right now. Each tab reports its open mail every 15 s (nothing while hidden); it needs a
   // personal sign-in, so the shared basic-auth gate has no presence.
@@ -660,8 +660,9 @@ function MailboxPage() {
   }
 
   function selectProject(id: string | null, threadId?: string) {
-    const first = threadId ?? mailboxRows(filterConversations(mailbox, id, query), displayMode, listOrder)[0]?.id
-    if (first ? !openConversation(first, !!threadId) : !preserveDraft()) return
+    // Opening a folder opens no mail: a mail is marked read only when someone clicks it.
+    if (threadId ? !openConversation(threadId, true) : !preserveDraft()) return
+    if (!threadId) setSelectedId('')
     setProjectId(id)
     setView('mail')
     setStatus('all')
@@ -796,7 +797,7 @@ function MailboxPage() {
                 const drafts = composerOpen ? { ...local.drafts, [conversation.id]: draft } : local.drafts
                 if (save({ ...local, drafts, displayMode: next })) {
                   clearSelection(); setNotice('')
-                  if (next === 'threads') {
+                  if (next === 'threads' && conversation.id) {
                     const messages = mailbox.conversations.filter(item => threadKey(item) === threadKey(conversation)).sort((a, b) => compareMessages(a, b, 'oldest'))
                     if (!composerOpen) setSelectedId(messages.at(-1)!.id)
                     void changeConversations(messages.map(item => item.id), { unread: false }, false)
@@ -889,7 +890,7 @@ function MailboxPage() {
                 return displayMode === 'threads' ? <details className="message thread-message" key={message.id} data-message-id={message.id} open={message.id === selectedId || message.id === threadMessages[conversationOrder === 'oldest' ? threadMessages.length - 1 : 0]?.id}><summary>{header}<Icon name="chevron" /></summary>{body}</details> : <article className="message" key={message.id} data-message-id={message.id}><header>{header}</header>{body}</article>
               })}
               {composerOpen ? <Suspense fallback={<p>{t('Chargement de l’éditeur…')}</p>}><MailComposer key={`${conversation.id}:${storageKey}`} draft={draft} onReady={revealComposer} onChange={setDraft} recipient={replyContact} subject={conversation.subject} storageKey={`${storageKey}:${conversation.id}`} busy={sendBusy} feedback={notice} saved={JSON.stringify(richDraft(local.drafts[conversation.id])) === JSON.stringify(draft)} sendDisabled={!online || !mailbox.connection || !storageReady || stateBusy || !!delivery || !!conversation.outgoing} sendHint={t(!online ? 'Hors ligne : l’envoi reprendra une fois reconnecté. Le brouillon reste sur cet appareil.' : !mailbox.connection ? 'Connectez une boîte mail pour envoyer.' : delivery ? delivery.status === 'sent' ? 'Une réponse a déjà été envoyée à ce mail.' : 'Envoi en cours ou incertain : vérifiez Envoyés, ne renvoyez pas.' : 'Le brouillon sera sauvegardé avant l’envoi.')} onSave={() => { if (save({ ...localRef.current, drafts: { ...localRef.current.drafts, [conversation.id]: draft } })) setNotice(t('Brouillon enregistré dans ce navigateur. Aucun email envoyé.')) }} onFilesBusy={setComposerFilesBusy} onSend={mail => void send(mail)} /></Suspense> : <div className="reply-bar"><span>{conversation.outgoing ? t("Message envoyé") : local.drafts[conversation.id] ? t("Brouillon enregistré") : t("Aucune réponse préparée")}</span><button className="primary-button" disabled={conversation.outgoing || replyLocked} onClick={() => beginReply()}><Icon name="reply" />{local.drafts[conversation.id] ? t("Reprendre le brouillon") : t("Préparer une réponse")}</button></div>}
-            </> : <div className="empty-folder"><span className="empty-folder-icon" style={{ color: projectColor(selectedProject?.color ?? 'slate') }}><Icon name="folder" /></span><span className="eyebrow">{selectedProject ? projectPath(mailbox.projects, selectedProject.id) : t("Dossier indisponible")}</span><h2>{t("Ce dossier est vide")}</h2><p>{t("Déposez des conversations dans ce dossier ou utilisez « Déplacer vers un projet » depuis la boîte de réception.")}</p></div> : <div className="contact-history"><span className="eyebrow">{t("Historique des échanges")}</span><h2>{t("Les échanges avec")} {contact.name.split(' ')[0]}</h2><p>{t("Tous les projets et conversations associés à ce contact.")}</p>{mailbox.conversations.filter((item) => includesContact(item, contact)).map((item) => <button className="history-item" key={item.id} onClick={() => selectProject(item.projectId, item.id)}><span><strong>{item.subject}</strong><small>{mailbox.projects.find((project) => project.id === item.projectId)?.name}</small></span><span className={`status ${item.status}`}>{t(statuses[item.status])}</span></button>)}</div>}
+            </> : rows.length ? <div className="empty-folder"><span className="empty-folder-icon"><Icon name="mail" /></span><h2>{t("Aucun mail ouvert")}</h2><p>{t("Choisissez un mail dans la liste pour le lire.")}</p></div> : <div className="empty-folder"><span className="empty-folder-icon" style={{ color: projectColor(selectedProject?.color ?? 'slate') }}><Icon name="folder" /></span><span className="eyebrow">{selectedProject ? projectPath(mailbox.projects, selectedProject.id) : t("Dossier indisponible")}</span><h2>{t("Ce dossier est vide")}</h2><p>{t("Déposez des conversations dans ce dossier ou utilisez « Déplacer vers un projet » depuis la boîte de réception.")}</p></div> : <div className="contact-history"><span className="eyebrow">{t("Historique des échanges")}</span><h2>{t("Les échanges avec")} {contact.name.split(' ')[0]}</h2><p>{t("Tous les projets et conversations associés à ce contact.")}</p>{mailbox.conversations.filter((item) => includesContact(item, contact)).map((item) => <button className="history-item" key={item.id} onClick={() => selectProject(item.projectId, item.id)}><span><strong>{item.subject}</strong><small>{mailbox.projects.find((project) => project.id === item.projectId)?.name}</small></span><span className={`status ${item.status}`}>{t(statuses[item.status])}</span></button>)}</div>}
             {notice ? <p role="status" className="notice">{notice}</p> : null}
           </section>
 
