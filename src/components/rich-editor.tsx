@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
 import { Extension } from '@tiptap/core'
 import { TableKit } from '@tiptap/extension-table'
@@ -14,14 +14,17 @@ export function RichEditor({ value, onChange, disabled = false, id = 'reply', la
   const [linkOpen, setLinkOpen] = useState(false)
   const [link, setLink] = useState('')
   const filesHandler = useRef(onFiles); filesHandler.current = disabled ? undefined : onFiles
+  // Last HTML the editor reported: a prop equal to it is the echo of typing, not a change to load.
+  const emitted = useRef(value)
   const editor = useEditor({ extensions: [TableKit.configure({ table: { resizable: false } }), Image.configure({ inline: true, allowBase64: false }), EmailStyles, StarterKit.configure({ heading: { levels: [1, 2, 3] }, codeBlock: false, code: false, link: { openOnClick: false, HTMLAttributes: { rel: 'noopener noreferrer' } } })],
     content: value, immediatelyRender: false, autofocus: false, editable: !disabled,
     editorProps: { attributes: { id, role: 'textbox', 'aria-label': label, 'aria-multiline': 'true', 'data-placeholder': t('Écrivez votre message…') },
       handleDOMEvents: { paste: (_, event) => { const files = Array.from(event.clipboardData?.files ?? []); if (files.length && filesHandler.current) { event.preventDefault(); filesHandler.current(files); return true } return false } },
-    }, onUpdate: ({ editor }) => onChange(editor.getHTML(), editor.getText()),
+    }, onUpdate: ({ editor }) => { emitted.current = editor.getHTML(); onChange(emitted.current, editor.getText()) },
   })
   useEditorState({ editor, selector: ({ editor }) => editor ? [...['bold', 'italic', 'underline', 'strike', 'bulletList', 'orderedList', 'blockquote', 'link'].map(mark => editor.isActive(mark)), editor.isEmpty, editor.isActive('table'), editor.can().undo(), editor.can().redo()].join(':') : '' })
-  useEffect(() => { if (editor && value !== editor.getHTML()) editor.commands.setContent(value, { emitUpdate: false }) }, [editor, value])
+  // Layout effect: a passive one can run after the next keystroke and put back the previous HTML (lost letters, caret at the end).
+  useLayoutEffect(() => { if (editor && value !== emitted.current && value !== editor.getHTML()) { emitted.current = value; editor.commands.setContent(value, { emitUpdate: false }) } }, [editor, value])
   useEffect(() => { editor?.setEditable(!disabled, false) }, [editor, disabled])
   if (!editor) return <div className="editor-loading">{t('Chargement de l’éditeur…')}</div>
   const buttons = [

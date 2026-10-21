@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import type { AuthoringSettings, MailAttachment, RichDraft } from '../../shared/authoring'
 import { escapeHtml, MAX_ATTACHMENTS, MAX_ATTACHMENT_BYTES } from '../../shared/authoring'
 import { attachmentBytes, fileAttachment, loadDraftFiles, saveDraftFiles } from '../lib/draft-attachments'
@@ -9,7 +9,7 @@ import { useI18n } from '../lib/i18n'
 
 export type ComposedMail = { text: string; html: string; attachments: MailAttachment[] }
 export function MailComposer({ draft, onChange, recipient, subject, storageKey, busy, sendDisabled, sendHint, feedback, saved, onSave, onSend, onFilesBusy, onReady }: {
-  draft: RichDraft; onChange(draft: RichDraft): void; recipient: { name: string; email: string }; subject: string; storageKey: string; busy: boolean; sendDisabled: boolean; sendHint: string; feedback: string; saved: boolean; onSave(): void; onSend(mail: ComposedMail): void; onFilesBusy(busy: boolean): void; onReady(element: HTMLElement): void;
+  draft: RichDraft; onChange: Dispatch<SetStateAction<RichDraft>>; recipient: { name: string; email: string }; subject: string; storageKey: string; busy: boolean; sendDisabled: boolean; sendHint: string; feedback: string; saved: boolean; onSave(): void; onSend(mail: ComposedMail): void; onFilesBusy(busy: boolean): void; onReady(element: HTMLElement): void;
 }) {
   const { t } = useI18n()
   const [settings, setSettings] = useState<AuthoringSettings | null>(null)
@@ -36,7 +36,7 @@ export function MailComposer({ draft, onChange, recipient, subject, storageKey, 
       setSettings(config); setAttachments(files); setFilesReady(true)
       if (currentDraft.current.signatureId === undefined) {
         const signature = config.signatures.find(s => s.id === config.assignments[config.currentMemberId])
-        onChange({ ...currentDraft.current, signatureId: signature?.id ?? null, signatureHtml: signature?.html ?? '', signatureText: signature?.text ?? '' })
+        onChange(current => ({ ...current, signatureId: signature?.id ?? null, signatureHtml: signature?.html ?? '', signatureText: signature?.text ?? '' }))
       }
     }).catch(() => { if (active) setError(t('Impossible de charger les signatures ou les fichiers du brouillon. Fermez puis rouvrez pour réessayer.')) })
     return () => { active = false }
@@ -72,7 +72,7 @@ export function MailComposer({ draft, onChange, recipient, subject, storageKey, 
     const interpolate = (value: string, isHtml: boolean) => value.replace(/\{\{(contact\.name|contact\.email|subject|user\.name|user\.email)\}\}/g, (_, key) => isHtml ? escapeHtml(vars[key]) : vars[key])
     // Insert rather than replace: a template must never erase a reply already in progress.
     const insertedHtml = interpolate(html, true), insertedText = interpolate(text, false)
-    onChange({ ...draft, html: `${draft.html}${insertedHtml}`, text: `${draft.text}${draft.text ? '\n\n' : ''}${insertedText}` })
+    onChange(current => ({ ...current, html: `${current.html}${insertedHtml}`, text: `${current.text}${current.text ? '\n\n' : ''}${insertedText}` }))
     setTemplatesOpen(false); setPreview(false)
     requestAnimationFrame(() => document.getElementById('reply')?.focus())
   }
@@ -91,9 +91,9 @@ export function MailComposer({ draft, onChange, recipient, subject, storageKey, 
       <div className="composer-heading-actions"><span className="draft-indicator" aria-live="polite">{saved ? <Icon name="check" /> : <span className="draft-saving-dot" />}{t(saved ? 'Brouillon enregistré' : 'Enregistrement automatique…')}</span><button type="button" className="icon-button composer-expand" aria-label={t(expanded ? 'Réduire l’éditeur' : 'Agrandir l’éditeur')} title={t(expanded ? 'Réduire l’éditeur' : 'Agrandir l’éditeur')} aria-expanded={expanded} onClick={toggleExpanded}><Icon name={expanded ? 'minimize' : 'maximize'} /></button></div>
     </div>
     {preview ? <div className="composer-preview"><span className="section-label">{t('Aperçu du mail')}</span><EmailPreview html={body().html} title={t('Aperçu du mail')} /></div> : null}
-    <div className="composer-writing" hidden={preview}><RichEditor value={draft.html} label={t('Votre brouillon')} disabled={busy} onFiles={files => void addFiles(files)} onChange={(html, text) => onChange({ ...draft, html, text })} /></div>
+    <div className="composer-writing" hidden={preview}><RichEditor value={draft.html} label={t('Votre brouillon')} disabled={busy} onFiles={files => void addFiles(files)} onChange={(html, text) => onChange(current => ({ ...current, html, text }))} /></div>
     <div className="composer-signature">
-      <div className="signature-controls"><label>{t('Signature')}<select value={draft.signatureId ?? ''} disabled={busy || !settings} onChange={e => { const signature = settings?.signatures.find(item => item.id === e.target.value); onChange({ ...draft, signatureId: signature?.id ?? null, signatureHtml: signature?.html ?? '', signatureText: signature?.text ?? '' }) }}><option value="">{t('Sans signature')}</option>{settings?.signatures.map(signature => <option value={signature.id} key={signature.id}>{signature.name}</option>)}{draft.signatureId && !settings?.signatures.some(s => s.id === draft.signatureId) ? <option value={draft.signatureId}>{t('Signature du brouillon')}</option> : null}</select></label>
+      <div className="signature-controls"><label>{t('Signature')}<select value={draft.signatureId ?? ''} disabled={busy || !settings} onChange={e => { const signature = settings?.signatures.find(item => item.id === e.target.value); onChange(current => ({ ...current, signatureId: signature?.id ?? null, signatureHtml: signature?.html ?? '', signatureText: signature?.text ?? '' })) }}><option value="">{t('Sans signature')}</option>{settings?.signatures.map(signature => <option value={signature.id} key={signature.id}>{signature.name}</option>)}{draft.signatureId && !settings?.signatures.some(s => s.id === draft.signatureId) ? <option value={draft.signatureId}>{t('Signature du brouillon')}</option> : null}</select></label>
       {draft.signatureHtml && !preview ? <button type="button" className="icon-button signature-preview-toggle" aria-expanded={signaturePreview} aria-label={t(signaturePreview ? 'Masquer la signature' : 'Afficher la signature')} title={t(signaturePreview ? 'Masquer la signature' : 'Afficher la signature')} onClick={() => setSignaturePreview(!signaturePreview)}><Icon name="eye" /></button> : null}</div>
       {draft.signatureHtml && signaturePreview && !preview ? <EmailPreview title={t('Signature du mail')} html={draft.signatureHtml} /> : null}
     </div>
