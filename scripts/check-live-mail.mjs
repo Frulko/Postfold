@@ -267,6 +267,21 @@ try {
   const largeSent = mailbox.conversations.find(item => item.id === `sent_${largeReply.requestId}`)
   assert.equal(largeSent.imapReady, true, 'A sent MIME copy above 10 MiB must still synchronize within the 16 MiB import bound')
   console.info('Large attachment MIME overhead and native Sent synchronization: passed')
+  const quoteHeader = 'On Wednesday 22 October 2026 at 10:05, Customer <customer@postfold.test> wrote:'
+  const quoteClient = new ImapFlow({ host: 'localhost', port: imapPort, secure: true, auth: { user: 'support', pass: 'test-only-mail-password' }, tls, logger: false })
+  quoteClient.on('error', () => {})
+  try { await quoteClient.connect(); await quoteClient.append('INBOX', `From: Customer <customer@postfold.test>\r\nTo: support@postfold.test\r\nSubject: Printer jam\r\nMessage-ID: <${randomUUID()}@postfold.test>\r\nDate: Wed, 22 Oct 2026 10:05:00 +0200\r\n\r\nThe printer is jammed again.\r\nCan you help?\r\n`) }
+  finally { await quoteClient.logout().catch(() => quoteClient.close()) }
+  mailbox = await store.sync()
+  const jam = mailbox.conversations.find(item => item.subject === 'Printer jam')
+  const quotedReply = { id: jam.id, revision: mailbox.conversationStates.find(item => item.id === jam.id).revision, text: 'Quoted answer.', html: '<p>Quoted answer.</p>', quoteHeader, requestId: randomUUID() }
+  await store.reply(quotedReply, supportActor)
+  mailbox = await store.sync()
+  const quotedSent = mailbox.conversations.find(item => item.id === `sent_${quotedReply.requestId}`)
+  const { text: quotedText, html: quotedHtml } = await store.messageContent(quotedSent.id)
+  assert.equal(quotedText.trimEnd(), `Quoted answer.\n\n${quoteHeader}\n> The printer is jammed again.\n> Can you help?`, 'The text part quotes the replied mail under its header')
+  assert.ok(quotedHtml.indexOf('Quoted answer.') < quotedHtml.indexOf('wrote:') && quotedHtml.includes('<blockquote') && quotedHtml.includes('&lt;customer@postfold.test&gt;') && quotedHtml.includes('The printer is jammed again.'), 'The HTML part quotes the replied mail in a blockquote under the reply')
+  console.info('Reply quoting the replied mail in text and HTML: passed')
   const newMail = { to: ['customer@postfold.test', 'manager@postfold.test'], subject: 'Onboarding checklist', text: 'Here is the checklist.', html: '<p>Here is the <em>checklist</em>.</p><script>unsafe()</script>', requestId: randomUUID() }
   await assert.rejects(store.compose({ ...newMail, to: [] }), /Invalid mail/)
   await assert.rejects(store.compose({ ...newMail, to: ['customer@postfold.test', 'Customer@postfold.test'] }), /Invalid mail/)

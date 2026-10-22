@@ -444,6 +444,8 @@ const english: Record<string, string> = {
   "À jour": "Up to date",
   "À jour · {0}": "Up to date · {0}",
   "Masquer": "Dismiss",
+  "Le {0}, {1} a écrit :": "On {0}, {1} wrote:",
+  "Chargement du fil…": "Loading the thread…",
   "Mettre à la corbeille du serveur mail": "Move to the mail server’s Trash",
   "Les nouveaux mails et les changements de l’équipe s’affichent d’eux-mêmes en quelques secondes.": "New mail and the team's changes show up by themselves within seconds.",
   "Reprendre le brouillon": "Resume draft",

@@ -1107,7 +1107,6 @@ export class MailStore extends ProjectStore {
     if (!isReplyRequest(input)) throw new BadRequestException('Invalid reply.')
     return this.exclusive(async () => {
       const digest = hash(JSON.stringify(input.html === undefined && !input.attachments?.length ? [input.id, input.text] : [input.id, input.text, input.html ?? '', input.attachments ?? []]))
-      const html = input.html === undefined ? undefined : cleanEmailHtml(input.html)
       const { rows: attempts } = await this.pool.query('SELECT status, body_hash, sent_copy FROM mail_sends WHERE mailbox_id=$1 AND request_id=$2', [this.mailboxId, input.requestId])
       if (attempts.length) {
         if (attempts[0].body_hash !== digest) throw new ConflictException('Request ID already used for a different reply.')
@@ -1135,7 +1134,13 @@ export class MailStore extends ProjectStore {
         subject: /^re:/i.test(message.subject) ? message.subject : `Re: ${message.subject}`,
         participants: [{ name: message.participants?.find(person => person.email.toLowerCase() === message.replyTo!.toLowerCase())?.name ?? message.replyTo, email: message.replyTo }],
         sender: { name: this.account.name || this.account.email, email: this.account.email }, preview: cleanText(input.text.replace(/\s+/g, ' ').slice(0, 200)), body: input.text, unread: false }
-      const sentCopy = await this.deliver('Reply', input, html, outgoing, [message.replyTo], { targetId: input.id, replyKey: `${message.threadId}:${message.messageId ?? input.id}`, digest, actor,
+      // Like a mail client, the replied mail is quoted under the reply and its signature: "On …, X wrote:" then the original.
+      const quoted = input.quoteHeader ? await this.messageContent(input.id).catch(() => ({ html: null, text: message.body })) : null
+      const text = quoted ? `${input.text}\n\n${input.quoteHeader}\n${quoted.text.trimEnd().split('\n').map((line) => line ? `> ${line}` : '>').join('\n')}` : input.text
+      const escape = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      const html = input.html === undefined ? undefined : cleanEmailHtml(input.html + (quoted ? `<br><div>${escape(input.quoteHeader!)}</div>` +
+        `<blockquote style="margin:0px 0px 0px 8px;padding:0px 0px 0px 12px;border-left:2px solid #cccccc">${quoted.html ?? escape(quoted.text).replace(/\n/g, '<br>')}</blockquote>` : ''))
+      const sentCopy = await this.deliver('Reply', { ...input, text }, html, outgoing, [message.replyTo], { targetId: input.id, replyKey: `${message.threadId}:${message.messageId ?? input.id}`, digest, actor,
         inReplyTo: message.messageId, references: [...(message.references ?? []), ...(message.messageId ? [message.messageId] : [])], assigneeId: states.find(item => item.id === input.id)?.assigneeId ?? null })
       await this.pool.query("UPDATE demo_conversation_state SET status='waiting', revision=revision+1 WHERE mailbox_id=$1 AND id=$2 AND status<>'waiting'", [this.mailboxId, input.id])
       return { status: 'sent' as const, sentCopy }

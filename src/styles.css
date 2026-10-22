@@ -308,6 +308,7 @@ h1 { font-size: 20px; font-weight: 650; letter-spacing: -.6px; line-height: 1.35
 .message-frame { display: block; width: 100%; border: 0; }
 .message-loading { min-height: 120px; border-radius: var(--radius); background: linear-gradient(90deg, var(--soft), #fafafa, var(--soft)) 0 0 / 200% 100%; animation: message-loading 1.2s ease-in-out infinite; }
 @keyframes message-loading { to { background-position: -200% 0; } }
+.thread-loading { min-height: 56px; margin-bottom: 8px; }
 @media (prefers-reduced-motion: reduce) { .message-loading { animation: none; } }
 .message-images { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 14px; padding: 8px 12px; border-radius: var(--radius); background: var(--soft); white-space: normal; font-size: 11px; line-height: 1.5; color: var(--muted); }
 .message-images .icon { width: 14px; height: 14px; }

@@ -2,7 +2,8 @@ import { MAX_ATTACHMENTS, MAX_ATTACHMENT_BYTES, type MailAttachment } from './au
 export type MailEndpoint = { host: string; port: number; security: 'tls' | 'starttls'; user: string; password: string }
 export type MailAccount = { email: string; name: string; imap: MailEndpoint; smtp: MailEndpoint; sentPath: string; saveSent: boolean }
 // `signatureId` names the sender: the signature's name is the From name, the mailbox name otherwise.
-export type ReplyRequest = { id: string; revision: number; text: string; html?: string; attachments?: MailAttachment[]; signatureId?: string; requestId: string }
+// `quoteHeader` ("On …, X wrote:") quotes the replied mail under the reply, written in the sender's language and time zone.
+export type ReplyRequest = { id: string; revision: number; text: string; html?: string; attachments?: MailAttachment[]; signatureId?: string; quoteHeader?: string; requestId: string }
 export type NewMailRequest = { to: string[]; subject: string; text: string; html?: string; attachments?: MailAttachment[]; signatureId?: string; requestId: string }
 export const MAX_RECIPIENTS = 20
 
@@ -25,7 +26,8 @@ export function isMailAccount(value: unknown): value is MailAccount {
 export function isReplyRequest(value: unknown): value is ReplyRequest {
   if (!value || typeof value !== 'object') return false
   const item = value as ReplyRequest
-  return Object.keys(item).every((key) => ['id', 'revision', 'text', 'html', 'attachments', 'signatureId', 'requestId'].includes(key)) &&
+  return Object.keys(item).every((key) => ['id', 'revision', 'text', 'html', 'attachments', 'signatureId', 'quoteHeader', 'requestId'].includes(key)) &&
+    (item.quoteHeader === undefined || (typeof item.quoteHeader === 'string' && item.quoteHeader.length > 0 && item.quoteHeader.length <= 400 && !/[\x00-\x1f]/.test(item.quoteHeader))) &&
     typeof item.id === 'string' && item.id.length > 0 && item.id.length <= 100 && Number.isSafeInteger(item.revision) && item.revision >= 0 && isMailBody(item)
 }
 

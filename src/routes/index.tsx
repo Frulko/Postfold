@@ -335,7 +335,14 @@ function MailboxPage() {
   selectedRef.current = selectedId
   // A live window holds one page of mails: opening a mail loads the rest of its thread (other folders, sent replies).
   // ponytail: reloads the list window on each open, add a thread-only request if that gets slow
-  useEffect(() => { if (windowed && online && selectedId && displayMode === 'messages') void refreshMailbox(false).catch(() => {}) }, [selectedId])
+  const [threadLoading, setThreadLoading] = useState('')
+  useEffect(() => {
+    if (!windowed || !online || !selectedId || displayMode !== 'messages') return
+    setThreadLoading(selectedId)
+    void refreshMailbox(false).catch(() => {}).finally(() => setThreadLoading((id) => id === selectedId ? '' : id))
+  }, [selectedId])
+  // Earlier mails of the thread are still on their way: a placeholder holds their place, then the reader scrolls to the opened mail.
+  const threadPending = threadLoading === selectedId && (conversation.threadSize ?? 1) > fullThread.length
   // The URL follows the open folder and mail; back and forward reopen them without marking anything read.
   const inUrl = (search.folder ?? null) === projectId && (search.mail ?? '') === selectedId
   useEffect(() => { if (!inUrl) void navigate({ search: (prev) => ({ ...prev, folder: projectId ?? undefined, mail: selectedId || undefined }) }) }, [projectId, selectedId])
@@ -463,6 +470,8 @@ function MailboxPage() {
   const revealConversation = useCallback((order = conversationOrder) => {
     const reader = readingPane.current
     if (!reader) return
+    const opened = reader.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(selectedRef.current)}"]`)
+    if (displayMode === 'messages' && opened) return revealInReader(opened)
     if (displayMode === 'messages') {
       const panel = window.matchMedia('(max-width: 820px)').matches ? reader.parentElement! : reader
       panel.scrollTo({ top: panel === reader ? 0 : panel.scrollTop + reader.getBoundingClientRect().top - panel.getBoundingClientRect().top })
@@ -480,7 +489,7 @@ function MailboxPage() {
       else readingPane.current?.scrollTo({ top: 0 })
     })
     return () => cancelAnimationFrame(frame)
-  }, [selectedId, view, contactId, storageReady, revealConversation])
+  }, [selectedId, view, contactId, storageReady, revealConversation, threadPending])
 
   const revealComposer = useCallback((element: HTMLElement) => {
     element.querySelector<HTMLElement>('#reply')?.focus({ preventScroll: true })
@@ -672,7 +681,9 @@ function MailboxPage() {
     setSendBusy(true)
     setNotice('')
     try {
-      const result = await sendReply({ data: { id: targetId, revision, ...mail, requestId } })
+      const author = conversation.sender ?? replyContact, when = fullMailTime(conversation.sentAt, locale)
+      const quoteHeader = when ? t("Le {0}, {1} a écrit :", when, `${author.name} <${author.email}>`) : undefined
+      const result = await sendReply({ data: { id: targetId, revision, ...mail, ...(quoteHeader ? { quoteHeader } : {}), requestId } })
       if (result.ok) {
         const latest = localRef.current
         const drafts = { ...latest.drafts }; delete drafts[targetId]
@@ -952,12 +963,14 @@ function MailboxPage() {
               </div>
               {coReaders.length ? <p className={`reader-banner ${replier ? 'replying' : ''}`} role="status">{replier ? <><Icon name="reply" />{t("{0} rédige une réponse à ce mail : répondre en même temps risque un doublon.", replier.name)}{replyLocked ? <button type="button" onClick={() => setReplyAnyway(conversation.id)}>{t("Répondre quand même")}</button> : null}</> : <><Icon name="users" />{t("Aussi ouvert par {0}", coReaders.map((reader) => reader.name).join(', '))}</>}</p> : null}
               <ConversationActivity key={conversation.id} ids={readingIds} projects={mailbox.projects} labels={mailbox.labels ?? []} version={readingIds.map((id) => latestStates.current.find((item) => item.id === id)?.revision).join(",") + JSON.stringify(mailbox.deliveries ?? [])} />
+              {threadPending && conversationOrder === 'oldest' ? <div className="message-loading thread-loading" role="status"><span className="sr-only">{t("Chargement du fil…")}</span></div> : null}
               {fullThread.map((message) => {
                 const sender = message.sender ?? mailbox.contacts.find((item) => item.id === message.contactId)!
                 const header = <><span className="contact-avatar" style={personColor(avatarSeed(sender))}>{initials(sender.name)}</span><div><strong>{sender.name}</strong><small>{sender.email}</small></div><time dateTime={message.sentAt} title={fullMailTime(message.sentAt, locale)} suppressHydrationWarning>{formatMailTime(message.sentAt, locale) ?? t(message.time)}</time></>
                 const body = <><MessageBody id={message.id} text={message.body} sender={sender.email} live={!!mailbox.connection} /><button className="message-reply secondary-button" disabled={message.outgoing || replyLocked} onClick={() => beginReply(message.id)}><Icon name="reply" />{t("Répondre à ce mail")}</button></>
                 return displayMode === 'threads' || fullThread.length > 1 ? <details className="message thread-message" key={message.id} data-message-id={message.id} open={message.id === selectedId || message.id === threadMessages[conversationOrder === 'oldest' ? threadMessages.length - 1 : 0]?.id}><summary>{header}<Icon name="chevron" /><span className="thread-excerpt">{message.preview}</span></summary>{body}</details> : <article className="message" key={message.id} data-message-id={message.id}><header>{header}</header>{body}</article>
               })}
+              {threadPending && conversationOrder === 'newest' ? <div className="message-loading thread-loading" role="status"><span className="sr-only">{t("Chargement du fil…")}</span></div> : null}
               {composerOpen ? <Suspense fallback={<p>{t('Chargement de l’éditeur…')}</p>}><MailComposer key={`${conversation.id}:${storageKey}`} draft={draft} onReady={revealComposer} onChange={setDraft} recipient={replyContact} subject={conversation.subject} storageKey={`${storageKey}:${conversation.id}`} busy={sendBusy} feedback={notice} saved={JSON.stringify(richDraft(local.drafts[conversation.id])) === JSON.stringify(draft)} sendDisabled={!online || !mailbox.connection || !storageReady || stateBusy || !!delivery || !!conversation.outgoing} sendHint={t(!online ? 'Hors ligne : l’envoi reprendra une fois reconnecté. Le brouillon reste sur cet appareil.' : !mailbox.connection ? 'Connectez une boîte mail pour envoyer.' : delivery ? delivery.status === 'sent' ? 'Une réponse a déjà été envoyée à ce mail.' : 'Envoi en cours ou incertain : vérifiez Envoyés, ne renvoyez pas.' : 'Le brouillon sera sauvegardé avant l’envoi.')} onSave={() => { if (save({ ...localRef.current, drafts: { ...localRef.current.drafts, [conversation.id]: draft } })) setNotice(t('Brouillon enregistré dans ce navigateur. Aucun email envoyé.')) }} onFilesBusy={setComposerFilesBusy} onSend={mail => void send(mail)} /></Suspense> : <div className="reply-bar"><span>{conversation.outgoing ? t("Message envoyé") : local.drafts[conversation.id] ? t("Brouillon enregistré") : t("Aucune réponse préparée")}</span><button className="primary-button" disabled={conversation.outgoing || replyLocked} onClick={() => beginReply()}><Icon name="reply" />{local.drafts[conversation.id] ? t("Reprendre le brouillon") : t("Préparer une réponse")}</button></div>}
             </> : rows.length ? <div className="empty-folder"><span className="empty-folder-icon"><Icon name="mail" /></span><h2>{t("Aucun mail ouvert")}</h2><p>{t("Choisissez un mail dans la liste pour le lire.")}</p></div> : <div className="empty-folder"><span className="empty-folder-icon" style={{ color: projectColor(selectedProject?.color ?? 'slate') }}><Icon name="folder" /></span><span className="eyebrow">{selectedProject ? projectPath(mailbox.projects, selectedProject.id) : projectId ? t("Dossier indisponible") : t("Boîte de réception")}</span><h2>{t("Ce dossier est vide")}</h2><p>{t("Déposez des conversations dans ce dossier ou utilisez « Déplacer vers un projet » depuis la boîte de réception.")}</p></div> : <div className="contact-history"><span className="eyebrow">{t("Historique des échanges")}</span><h2>{t("Les échanges avec")} {contact.name.split(' ')[0]}</h2><p>{t("Tous les projets et conversations associés à ce contact.")}</p>{mailbox.conversations.filter((item) => includesContact(item, contact)).map((item) => <button className="history-item" key={item.id} onClick={() => selectProject(item.projectId, item.id)}><span><strong>{item.subject}</strong><small>{mailbox.projects.find((project) => project.id === item.projectId)?.name}</small></span><span className={`status ${item.status}`}>{t(statuses[item.status])}</span></button>)}</div>}
             {notice ? <p role="status" className="notice">{notice}</p> : null}
