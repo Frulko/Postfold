@@ -5,11 +5,12 @@ import { projectPath } from '../../shared/projects'
 import { getConversationActivity } from '../server/demo'
 import { formatMailTime, fullMailTime } from '../lib/mailbox'
 import { useI18n } from '../lib/i18n'
+import { Icon } from './icon'
 
 const SHOWN = 3
 
 // Who did what and when on the open mail (replies, filing, status, labels, assignment, read state), newest first.
-// It loads with the mail and reloads when its state or a delivery changes.
+// It loads with the mail and reloads when its state or a delivery changes; folded by default behind a link with its count.
 export function ConversationActivity({ ids, version, projects, labels }: { ids: string[]; version: string; projects: Project[]; labels: Label[] }) {
   const { t, locale } = useI18n()
   const [entries, setEntries] = useState<Activity[]>([])
@@ -37,8 +38,8 @@ export function ConversationActivity({ ids, version, projects, labels }: { ids: 
     return changes
   }
   const shown = all ? entries : entries.slice(0, SHOWN)
-  return <section className="conversation-activity" aria-label={t("Historique des actions")} aria-live="polite">
-    <h3>{t("Historique")}{entries.length ? <span>{entries.length}</span> : null}</h3>
+  return <details className="conversation-activity" aria-live="polite">
+    <summary><Icon name="history" />{t("Historique")}{entries.length ? <span>{entries.length}</span> : null}</summary>
     {status === 'failed' ? <p role="alert">{t("Historique indisponible.")}</p>
       : status === 'loading' && !entries.length ? <p>{t("Chargement de l’historique…")}</p>
       : entries.length ? <ol>{shown.map((entry) => <li key={entry.id} className={entry.kind === 'reply' ? 'activity-reply' : undefined}>
@@ -48,5 +49,5 @@ export function ConversationActivity({ ids, version, projects, labels }: { ids: 
       : <p>{t("Aucune action enregistrée : ni réponse, ni rangement, ni changement d’état.")}</p>}
     {entries.length > SHOWN ? <button type="button" className="activity-more" aria-expanded={all} onClick={() => setAll(!all)}>{all ? t("Réduire") : t("Voir tout l’historique ({0})", entries.length)}</button> : null}
     {all ? <small>{t("50 dernières actions · Les actions des clients mail natifs ne sont pas attribuées.")}</small> : null}
-  </section>
+  </details>
 }

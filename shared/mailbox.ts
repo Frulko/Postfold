@@ -6,6 +6,8 @@ export type Conversation = {
   projectId: string
   contactId: string
   threadId?: string
+  // Mails in the thread, every folder included; set on live list windows.
+  threadSize?: number
   sentAt?: string
   sender?: { name: string; email: string }
   participants?: Pick<Contact, 'name' | 'email'>[]
@@ -36,7 +38,7 @@ export type ProjectSettings = {
 }
 export type Member = { id: string; name: string; email: string; provider?: 'demo' | 'keycloak'; role?: 'admin' | 'member'; active?: boolean; lastSeen?: string; managedAdmin?: boolean }
 // A colleague with these mails open right now, and whether they are writing a reply.
-export type Reader = { id: string; name: string; ids: string[]; replying: boolean }
+export type Reader = { id: string; name: string; email?: string; ids: string[]; replying: boolean }
 export type Activity = { id: string; conversationId: string; createdAt: string; actor: Pick<Member, 'id' | 'name'> | null; kind: 'updated' | 'reply'; data: { before?: ConversationState; after?: ConversationState; status?: 'sending' | 'sent' | 'uncertain'; restoredFromArchive?: string } }
 export type ConversationState = Pick<Conversation, 'id' | 'unread' | 'status'> & { revision: number; projectId?: string; labelIds?: string[]; assigneeId?: string | null; assignee?: string | null }
 export type ConversationPatch = Partial<Pick<Conversation, 'unread' | 'status' | 'projectId' | 'assigneeId'>> & { addLabelIds?: string[]; removeLabelIds?: string[] }

@@ -452,15 +452,17 @@ export class MailStore extends ProjectStore {
     const longest = bind([...words].sort((a, b) => b.length - a.length)[0] ?? '')
     const excerpt = `CASE WHEN ${longest} <> '' AND m.body IS NOT NULL AND strpos(postfold_fold(m.body), ${longest}) > 0
       THEN substr(m.body, GREATEST(1, strpos(postfold_fold(m.body), ${longest}) - 60), 240) END`
+    // Each listed mail tells how many mails its thread holds, every folder included.
+    const threadSize = "(SELECT count(*)::integer FROM mail_messages t WHERE t.mailbox_id = m.mailbox_id AND t.data->>'threadId' = m.data->>'threadId')"
     const page = order === 'relevance'
       ? `ORDER BY ${rank()} DESC, m.data->>'sentAt' DESC, m.id DESC OFFSET ${bind(cursor ?? 0)} LIMIT ${bind(limit + 1)}`
       : `${cursor ? `AND (m.data->>'sentAt', m.id) ${order === 'oldest' ? '>' : '<'} (${bind((cursor as string[])[0])}, ${bind((cursor as string[])[1])})` : ''}
         ORDER BY m.data->>'sentAt' ${order === 'oldest' ? 'ASC' : 'DESC'}, m.id ${order === 'oldest' ? 'ASC' : 'DESC'} LIMIT ${bind(limit + 1)}`
     const [rows, total] = await this.searchQuery(async (client) => [
-      (await client.query<{ data: CachedMessage['data']; excerpt: string | null }>(`SELECT m.data - 'references' AS data, ${excerpt} AS excerpt ${from} WHERE ${where} ${page}`, values)).rows,
+      (await client.query<{ data: CachedMessage['data']; excerpt: string | null; thread_size: number }>(`SELECT m.data - 'references' AS data, ${excerpt} AS excerpt, ${threadSize} AS thread_size ${from} WHERE ${where} ${page}`, values)).rows,
       (await client.query<{ messages: number; threads: number }>(`SELECT count(*)::integer AS messages, count(DISTINCT COALESCE(m.data->>'threadId', m.id))::integer AS threads ${from} WHERE ${where}`, filterValues)).rows[0],
     ] as const)
-    const messages: Conversation[] = rows.slice(0, limit).map((row) => row.excerpt ? { ...row.data, snippet: row.excerpt.replace(/\s+/g, ' ').trim() } : row.data)
+    const messages: Conversation[] = rows.slice(0, limit).map((row) => ({ ...row.data, threadSize: row.thread_size, ...(row.excerpt ? { snippet: row.excerpt.replace(/\s+/g, ' ').trim() } : {}) }))
     const last = messages.at(-1)
     const nextCursor = rows.length <= limit || !last ? null : Buffer.from(JSON.stringify(order === 'relevance' ? Number(cursor ?? 0) + limit : [last.sentAt ?? '', last.id])).toString('base64url')
     // Threads are shown whole, and the open conversation stays loaded whatever the filters.

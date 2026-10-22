@@ -22,7 +22,7 @@ Postfold brings project folders, conversation tracking and contact context into 
 | Contacts | Contact details, associated projects, conversation history and browser-local notes. |
 | Drafts | Save and Send controls together; local draft persistence and save on conversation change. Send stays disabled until a mailbox is connected. |
 | Refresh | Manual refresh and automatic refresh every 30 seconds while visible and online. Live mode synchronizes IMAP; demo mode refreshes fictional API data. |
-| Interface | Responsive layout, keyboard controls and a compact folder tree, French/English controls and a header with simulated team presence. No real presence synchronization yet. |
+| Interface | Responsive layout, keyboard controls and a compact folder tree, French/English controls and a header listing colleagues online and what each one reads, refreshed every 3 seconds (simulated in the demo; needs Keycloak sign-in). |
 
 ### Batch actions without moving the list
 
@@ -63,7 +63,7 @@ A compact sticky header keeps the subject, participants and reply action visible
 
 Switching views or order preserves the current draft. Message actions affect one message in All messages mode; thread actions affect every message in that thread, including messages outside the current folder or search filter. Opening a thread marks its messages read. Drafts remain associated with the message being answered.
 
-The contact profile can be hidden to give the reader more space; its visibility is saved in this browser, and toggling it preserves unsaved notes.
+The contact profile starts hidden to give the reader more space; open it from the reader header. Its visibility is saved with your preferences, and toggling it preserves unsaved notes.
 
 ![An 18-message support incident with saved ordering and individual participant profiles](screenshots/conversation-thread.png)
 
@@ -125,7 +125,7 @@ Use the assignment control in the reader or batch actions to assign messages to 
 
 Assignment changes use the same revisions as read flags, workflow states, filing and labels. A conflict cancels the whole batch, returns current states and requires an explicit retry. Assignment stays in PostgreSQL and does not modify IMAP messages. In live mode, new messages in an existing thread inherit the most recent message's assignment; existing assignments survive native moves and synchronization. All messages mode changes one message, while Conversations mode changes all currently known messages in that thread.
 
-Open **Activity history** to see the latest 50 recorded state changes and SMTP send attempts for the displayed messages. Authors come from the verified API session. The journal captures actual before/after states in the same transaction; no-op or rejected writes create no entries. Send authors are persisted atomically with the send reservation before SMTP starts; the attempt shows sending, accepted or uncertain delivery without inventing a successful response. Duplicate retries reuse the original attempt and author.
+The **History** link above the messages, folded by default, shows the latest 50 recorded state changes and SMTP send attempts for the displayed messages. Authors come from the verified API session. The journal captures actual before/after states in the same transaction; no-op or rejected writes create no entries. Send authors are persisted atomically with the send reservation before SMTP starts; the attempt shows sending, accepted or uncertain delivery without inventing a successful response. Duplicate retries reuse the original attempt and author.
 
 ![Alice Support assigned to an IT support request, with verified authors and assignment changes in the activity history](screenshots/assignment-and-activity.png)
 

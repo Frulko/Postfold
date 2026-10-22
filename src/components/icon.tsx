@@ -37,6 +37,7 @@ const paths = {
   grip: 'M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01',
   edit: 'm16 3 5 5M3 21l5-1L21 7a2 2 0 0 0-4-4L4 16l-1 5Z',
   tag: 'M3 3h8l10 10-8 8L3 11V3Zm4 4h.01',
+  history: 'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2',
 }
 
 export function Icon({ name }: { name: keyof typeof paths }) {

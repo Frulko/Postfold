@@ -3,7 +3,7 @@ import type { SettingsTab } from '../components/authoring-settings'
 import { richDraft, isRichDraft, type RichDraft } from '../../shared/authoring'
 import { deleteDraftFiles } from '../lib/draft-attachments'
 import { useI18n } from '../lib/i18n'
-import { Suspense, lazy, useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useRef, useState, type CSSProperties, type DragEvent } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { avatarColor, avatarColors, avatarSeed, compareMessages, filterConversations, formatMailTime, fullMailTime, highlightParts, includesContact, mailboxRows, suggestProjects, threadContacts, threadKey, updateSelection, type MailOrder } from '../lib/mailbox'
 import { getDemoMailbox, listMailbox, searchContacts, saveProjectSettings, savePreferences, updateConversationState, syncMailbox, sendReply, reportPresence } from '../server/demo'
@@ -296,7 +296,8 @@ function MailboxPage() {
   const displayMode = local.displayMode ?? 'messages'
   const listOrder = local.listOrder ?? 'newest'
   const conversationOrder = local.conversationOrder ?? 'oldest'
-  const contactCollapsed = view === 'mail' && !!local.contactCollapsed
+  // The contact panel starts closed; opening it is remembered like the other display preferences.
+  const contactCollapsed = view === 'mail' && (local.contactCollapsed ?? true)
   const [debouncedQuery, setDebouncedQuery] = useState('')
   useEffect(() => { const timer = setTimeout(() => setDebouncedQuery(query.trim()), 300); return () => clearTimeout(timer) }, [query])
   // Live search results are ranked by relevance unless a date order is chosen for this search.
@@ -307,6 +308,9 @@ function MailboxPage() {
   const marked = (text: string) => highlightParts(text, highlights).map((part, index) => part.mark ? <mark key={index}>{part.text}</mark> : part.text)
   const [searchHelp, setSearchHelp] = useState(false)
   const rows = mailboxRows(conversations, displayMode, rowOrder)
+  // Thread sizes for the demo, whose mailbox is complete; live windows get them from the server.
+  const threadSizes = new Map<string, number>()
+  for (const item of mailbox.conversations) threadSizes.set(threadKey(item), (threadSizes.get(threadKey(item)) ?? 0) + 1)
   const conversation = mailbox.conversations.find((item) => item.id === selectedId) ?? { id: '', projectId: '', contactId: '', subject: '', preview: '', body: '', time: '', status: 'open' as const, assignee: null, unread: false }
   const replyContact = mailbox.contacts.find((item) => item.id === conversation.contactId) ?? mailbox.contacts[0] ?? { id: '', name: '', email: '', company: '', phone: '' }
   const project = mailbox.projects.find((item) => item.id === conversation.projectId) ?? mailbox.projects[0]
@@ -389,7 +393,7 @@ function MailboxPage() {
   const filingSuggestions = matchingProjects.filter((target) => threadMessages.some((item) => item.projectId !== target.id))
   const showConversation = !!conversation.id && (!projectId || filterConversations(mailbox, projectId, '').some((item) => readingIds.includes(item.id)))
   const delivery = mailbox.deliveries?.find((item) => item.targetId === conversation.id)
-  // Colleagues with a mail open right now. Each tab reports its open mail every 15 s (nothing while hidden); it needs a
+  // Colleagues online and the mail each has open. Each tab reports its open mail every 3 s (nothing while hidden); it needs a
   // personal sign-in, so the shared basic-auth gate has no presence.
   const [readers, setReaders] = useState<Reader[]>([])
   const [replyAnyway, setReplyAnyway] = useState('')
@@ -400,7 +404,7 @@ function MailboxPage() {
     const report = () => void reportPresence({ data: { ids: document.visibilityState === 'hidden' ? [] : JSON.parse(presenceIds), replying: composerOpen } })
       .then((list) => { if (active) setReaders(list) }, () => {})
     report()
-    const timer = setInterval(report, 15_000)
+    const timer = setInterval(report, 3_000)
     document.addEventListener('visibilitychange', report)
     return () => { active = false; clearInterval(timer); document.removeEventListener('visibilitychange', report) }
   }, [mailbox.viewer, online, presenceIds, composerOpen])
@@ -813,6 +817,22 @@ function MailboxPage() {
               </ul>
               <span className="presence-count">{demoPresence.length} {t("en ligne")} <span className="sr-only">{t("dans la démonstration")}</span></span>
             </div> : null}
+            {mailbox.viewer ? <div className="presence-group">
+              <ul className="presence-list" aria-label={t("Collègues en ligne")}>
+                {readers.map((reader) => {
+                  const { backgroundColor, color } = avatarColor(avatarSeed(reader))
+                  const subject = mailbox.conversations.find((item) => reader.ids.includes(item.id))?.subject
+                  const activity = t(reader.replying ? "Rédige une réponse" : reader.ids.length ? "Lit un mail" : "Disponible")
+                  return <li className="presence-item" key={reader.id}>
+                    <span className={`presence-avatar ${reader.replying ? 'busy' : 'online'}`} role="img" tabIndex={0} aria-label={t("{0} : {1}", reader.name, activity)} aria-describedby={`presence-${reader.id}`} style={{ backgroundColor, color }}>
+                      {initials(reader.name)}<span className="presence-dot" aria-hidden="true" />
+                    </span>
+                    <span className="presence-tooltip" id={`presence-${reader.id}`} role="tooltip"><strong>{reader.name}</strong><small>{activity}{subject ? ` · ${subject}` : ''}</small></span>
+                  </li>
+                })}
+              </ul>
+              <span className="presence-count">{readers.length + 1} {t("en ligne")}</span>
+            </div> : null}
             <span className="demo-badge">{t(mailbox.connection ? "IMAP / SMTP" : "Démonstration")}</span>
           </div>
         </header>
@@ -889,14 +909,17 @@ function MailboxPage() {
                 const sender = item.sender ?? mailbox.contacts.find((person) => person.id === item.contactId)!
                 const folder = mailbox.projects.find((folder) => folder.id === item.projectId)!
                 const watchers = readersOf(item.messageIds)
-                return <div key={item.id} data-conversation-id={item.id} data-folder-id={item.projectId} className={`thread-row ${watchers.length ? watchers.some((reader) => reader.replying) ? 'watched replying' : 'watched' : ''} ${item.unread ? 'unread' : ''} ${item.messageIds.includes(selectedId) ? 'selected' : ''} ${chosen.includes(item.id) ? 'checked' : ''} ${draggingIds.includes(item.id) ? 'dragging' : ''}`} draggable={storageReady} onDragStart={(event) => startDrag(event, item.id)} onDragEnd={finishDrag}>
+                // The row takes the colour of the colleague reading it, as in the header and on their badge.
+                const watcher = watchers[0] ? avatarColor(avatarSeed(watchers[0])) : null
+                const exchanges = displayMode === 'threads' ? item.messageIds.length : item.threadSize ?? threadSizes.get(threadKey(item)) ?? 1
+                return <div key={item.id} data-conversation-id={item.id} data-folder-id={item.projectId} className={`thread-row ${watchers.length ? watchers.some((reader) => reader.replying) ? 'watched replying' : 'watched' : ''} ${item.unread ? 'unread' : ''} ${item.messageIds.includes(selectedId) ? 'selected' : ''} ${chosen.includes(item.id) ? 'checked' : ''} ${draggingIds.includes(item.id) ? 'dragging' : ''}`} style={watcher ? { '--watcher': watcher.color, '--watcher-bg': watcher.backgroundColor } as CSSProperties : undefined} draggable={storageReady} onDragStart={(event) => startDrag(event, item.id)} onDragEnd={finishDrag}>
                   <label className="selection-hit row-selection"><input type="checkbox" aria-label={t("Sélectionner {0}", item.subject)} checked={chosen.includes(item.id)} onChange={(event) => choose(item.id, event.target.checked, event.nativeEvent instanceof MouseEvent && event.nativeEvent.shiftKey)} /></label>
                   <button className="thread-open" aria-pressed={item.messageIds.includes(selectedId)} onPointerEnter={() => { if (mailbox.connection) item.messageIds.slice(-3).forEach(prefetchMessage) }} onFocus={() => { if (mailbox.connection) item.messageIds.slice(-3).forEach(prefetchMessage) }} onClick={(event) => {
                     if (event.shiftKey || event.metaKey || event.ctrlKey) { choose(item.id, event.shiftKey || !chosen.includes(item.id), event.shiftKey); return }
                     if (openConversation(displayMode === 'threads' ? item.messageIds.at(-1)! : item.id, true)) { clearSelection(); selectionAnchor.current = item.id }
                   }}>
-                  <div className="row-top"><strong>{watchers.map((reader) => <span key={reader.id} className="row-reader" title={t(reader.replying ? "{0} répond à ce mail" : "{0} lit ce mail", reader.name)}>{reader.replying ? <Icon name="reply" /> : null}{initials(reader.name)}</span>)}{watchers.length ? <span className="sr-only">{watchers.map((reader) => t(reader.replying ? "{0} répond à ce mail" : "{0} lit ce mail", reader.name)).join(', ')} · </span> : null}{sender.name}</strong><time dateTime={item.sentAt} title={fullMailTime(item.sentAt, locale)} suppressHydrationWarning>{formatMailTime(item.sentAt, locale) ?? t(item.time)}</time></div>
-                  <div className="row-subject">{item.unread ? <span className="unread-dot" title={t("Non lu")}><span className="sr-only">{t("Non lu :")} </span></span> : <span className="sr-only">{t("Lu :")} </span>}{marked(item.subject)}{displayMode === 'threads' && item.messageIds.length > 1 ? <span className="thread-count" title={t("{0} mails dans ce fil", item.messageIds.length)}>{item.messageIds.length}</span> : null}</div>
+                  <div className="row-top"><strong>{watchers.map((reader) => <span key={reader.id} className="row-reader" style={avatarColor(avatarSeed(reader))} title={t(reader.replying ? "{0} répond à ce mail" : "{0} lit ce mail", reader.name)}>{reader.replying ? <Icon name="reply" /> : null}{initials(reader.name)}</span>)}{watchers.length ? <span className="sr-only">{watchers.map((reader) => t(reader.replying ? "{0} répond à ce mail" : "{0} lit ce mail", reader.name)).join(', ')} · </span> : null}{sender.name}</strong><time dateTime={item.sentAt} title={fullMailTime(item.sentAt, locale)} suppressHydrationWarning>{formatMailTime(item.sentAt, locale) ?? t(item.time)}</time></div>
+                  <div className="row-subject">{item.unread ? <span className="unread-dot" title={t("Non lu")}><span className="sr-only">{t("Non lu :")} </span></span> : <span className="sr-only">{t("Lu :")} </span>}{exchanges > 1 ? <span className="thread-count" title={t("{0} mails dans ce fil", exchanges)}>{exchanges}</span> : null}{marked(item.subject)}</div>
                   <p title={item.snippet ?? item.preview}>{item.snippet ? '… ' : null}{marked(item.snippet ?? item.preview)}</p><div className="row-bottom"><span className="folder-label" title={projectPath(mailbox.projects, folder.id)}>{folder.parentId ? folder.name : projectPath(mailbox.projects, folder.id)}</span>{item.assignee ? <span className="row-assignee" title={t("Attribué à {0}", item.assignee)} aria-label={t("Attribué à {0}", item.assignee)}>{initials(item.assignee)}</span> : null}<span className={`status ${item.status}`}>{t(statuses[item.status])}</span></div>{item.labelIds?.length ? <div className="message-labels">{(mailbox.labels ?? []).filter((label) => item.labelIds?.includes(label.id)).map((label) => <span className="label-chip" key={label.id}><span className="project-dot" style={{ backgroundColor: projectColor(label.color) }} />{label.name}</span>)}</div> : null}
                   </button>
                 </div>
@@ -910,7 +933,7 @@ function MailboxPage() {
             {view === 'mail' ? showConversation ? <>
               <header className="reading-context"><div><strong title={displayMode === 'threads' ? threadSubject : conversation.subject}>{displayMode === 'threads' ? threadSubject : conversation.subject}</strong><small title={participants.map(person => person.name).join(', ')}>{projectPath(mailbox.projects, project.id)} · {participants.map(person => person.name).join(', ') || replyContact.name}</small></div><span className={`status ${conversation.status}`}>{t(statuses[conversation.status])}</span><button className="icon-button" title={t('Préparer une réponse')} aria-label={t('Préparer une réponse')} onClick={() => beginReply()} disabled={conversation.outgoing || replyLocked}><Icon name="reply" /></button><button className="icon-button contact-toggle" aria-controls="contact-profile" aria-expanded={!contactCollapsed} aria-label={t(contactCollapsed ? 'Afficher la fiche contact' : 'Masquer la fiche contact')} title={t(contactCollapsed ? 'Afficher la fiche contact' : 'Masquer la fiche contact')} disabled={!storageReady} onClick={toggleContact}><Icon name="users" /></button></header>
               <div className="reading-toolbar"><ConversationActions unread={threadMessages.some((item) => item.unread)} status={conversation.status} disabled={stateBusy} onChange={(patch) => changeConversations(readingIds, patch)} /><LabelPicker labels={mailbox.labels ?? []} conversations={threadMessages} disabled={stateBusy} onChange={(patch) => changeConversations(readingIds, patch)} /><AssignmentPicker members={mailbox.members ?? []} currentId={mailbox.currentMemberId} conversations={threadMessages} disabled={stateBusy} onChange={(patch) => changeConversations(readingIds, patch)} /></div>
-              <div className="message-heading"><span className="eyebrow">{projectPath(mailbox.projects, project.id)}</span><div className="message-subject"><h2>{displayMode === 'threads' ? threadSubject : conversation.subject}</h2>
+              <div className="message-heading"><span className="eyebrow">{projectPath(mailbox.projects, project.id)}</span><div className="message-subject"><h2 title={displayMode === 'threads' ? threadSubject : conversation.subject}>{displayMode === 'threads' ? threadSubject : conversation.subject}</h2>
                 {filingSuggestions.length ? <div className="filing-suggestions" role="group" aria-label={t('Classement proposé')}>
                   {filingSuggestions.map((target) => {
                     const label = t(displayMode === 'threads' ? 'Ranger la conversation dans {0}' : 'Ranger le mail dans {0}', projectPath(mailbox.projects, target.id))

@@ -246,9 +246,9 @@ test('la présence montre les collègues sur un mail, jamais soi-même ni sans i
   assert.deepEqual(reportPresence(undefined, { ids: ['a'], replying: false }), [])
   assert.deepEqual(reportPresence(julie, { ids: ['a'], replying: true }), [])
   assert.deepEqual(reportPresence(marc, { ids: ['a', 'b'], replying: false }), [{ id: 'julie', name: 'Julie', ids: ['a'], replying: true }])
-  // Closing the mail removes Julie at once instead of waiting for the expiry.
+  // Closing the mail keeps Julie online, reading nothing.
   assert.deepEqual(reportPresence(julie, { ids: [], replying: false }), [{ id: 'marc', name: 'Marc', ids: ['a', 'b'], replying: false }])
-  assert.deepEqual(reportPresence(marc, { ids: [], replying: false }), [])
+  assert.deepEqual(reportPresence(marc, { ids: [], replying: false }), [{ id: 'julie', name: 'Julie', ids: [], replying: false }])
   assert.throws(() => reportPresence(marc, { ids: 'a', replying: false }))
   assert.throws(() => reportPresence(marc, { ids: [''], replying: false }))
 })
