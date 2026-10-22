@@ -7,7 +7,8 @@ import { simpleParser } from 'mailparser'
 import { cleanEmailHtml, cleanIncomingHtml } from './email-html.js'
 import { ProjectStore } from './project-store.js'
 import { loadAccount, saveAccount } from './mail-secrets.js'
-import { isMailAccountUpdate, isMailAddress, isReplyRequest, type MailAccount, type MailAccountSettings } from '../shared/mail-account.js'
+import { isMailAccountUpdate, isMailAddress, isNewMailRequest, isReplyRequest, type MailAccount, type MailAccountSettings } from '../shared/mail-account.js'
+import type { MailAttachment } from '../shared/authoring.js'
 import { isConversationUpdate, applyConversationStates } from '../shared/conversation-state.js'
 import { invalidProjectChange, isProjectSettings, projectPath } from '../shared/projects.js'
 import { fold, parseSearch, typoBudget, typoDistance } from '../shared/search.js'
@@ -1090,54 +1091,89 @@ export class MailStore extends ProjectStore {
         const { rows: nativeReplies } = await this.pool.query(`SELECT id FROM mail_messages WHERE mailbox_id=$1 AND data->>'threadId'=$2 AND (data->>'outgoing')::boolean=true AND COALESCE(data->'references','[]'::jsonb) ? $3 LIMIT 1`, [this.mailboxId, message.threadId, message.messageId])
         if (nativeReplies.length) throw new ConflictException('A reply from another mail client is already synchronized. Refresh the conversation before sending.')
       }
-      const transport = this.smtp()
-      await transport.verify()
-      const messageId = `<${input.requestId}@${this.account.email.split('@')[1]}>`
-      const date = new Date()
-      const outgoing: CachedMessage['data'] = { ...message, id: `sent_${input.requestId}`, messageId, outgoing: true, imapReady: false,
-        subject: /^re:/i.test(message.subject) ? message.subject : `Re: ${message.subject}`, sentAt: date.toISOString(), time: date.toISOString().slice(0, 10),
+      const outgoing: CachedMessage['data'] = { ...message, id: `sent_${input.requestId}`, outgoing: true, imapReady: false,
+        subject: /^re:/i.test(message.subject) ? message.subject : `Re: ${message.subject}`,
         participants: [{ name: message.participants?.find(person => person.email.toLowerCase() === message.replyTo!.toLowerCase())?.name ?? message.replyTo, email: message.replyTo }],
         sender: { name: this.account.name || this.account.email, email: this.account.email }, preview: cleanText(input.text.replace(/\s+/g, ' ').slice(0, 200)), body: input.text, unread: false }
-      const generated = await nodemailer.createTransport({ streamTransport: true, buffer: true }).sendMail({
-        from: { name: this.account.name, address: this.account.email }, to: message.replyTo, subject: outgoing.subject, text: input.text, html, attachments: input.attachments?.map(a => ({ filename: a.filename, contentType: a.contentType, content: Buffer.from(a.content, 'base64') })), date, messageId,
-        inReplyTo: message.messageId, references: [...(message.references ?? []), ...(message.messageId ? [message.messageId] : [])],
-        disableFileAccess: true, disableUrlAccess: true,
-      })
-      const raw = generated.message as Buffer
-      if (raw.length > MAX_MIME_BYTES) throw new BadRequestException('Message exceeds the archive size limit.')
-      // The send reservation and its trusted author must be durable before SMTP begins.
-      await this.pool.query(`WITH reserved AS (
-        INSERT INTO mail_sends (mailbox_id,request_id,target_id,reply_key,body_hash,status,data,source) VALUES ($1,$2,$3,$4,$5,'sending',$6,$8) RETURNING request_id
-      ) INSERT INTO postfold_activity (mailbox_id,id,conversation_id,actor,kind,data)
-        SELECT $1,request_id,$3,$7::jsonb,'reply','{"status":"sending"}'::jsonb FROM reserved`,
-        [this.mailboxId, input.requestId, input.id, `${message.threadId}:${message.messageId ?? input.id}`, digest, outgoing, actor ? JSON.stringify({ id: actor.id, name: actor.name }) : null, raw])
-      try {
-        const delivered = await transport.sendMail({ envelope: { from: this.account.email, to: [message.replyTo] }, raw })
-        if (!delivered.accepted?.length) throw new Error('No recipient accepted')
-        this.log('info', 'Reply sent to {0}', message.replyTo)
-      } catch (error) {
-        this.log('error', 'Reply to {0} could not be confirmed: {1}', message.replyTo, describeError(error))
-        await this.pool.query(`WITH delivery AS (UPDATE mail_sends SET status='uncertain' WHERE mailbox_id=$1 AND request_id=$2 RETURNING request_id)
-          UPDATE postfold_activity SET data=jsonb_set(data,'{status}','"uncertain"') WHERE mailbox_id=$1 AND id IN (SELECT request_id FROM delivery)`, [this.mailboxId, input.requestId])
-        throw new ConflictException('Delivery could not be confirmed. Do not resend; inspect Sent and the mail server. Your draft is preserved.')
-      }
-      await this.archiveMessage({ id: outgoing.id, path: this.account.sentPath, validity: '', uid: 0, raw_id: messageId, data: outgoing }, raw, ['\\Seen'], date,
-        { id: outgoing.id, revision: 0, unread: false, status: 'waiting', projectId: message.projectId, labelIds: [], assigneeId: states.find(item => item.id === input.id)?.assigneeId ?? null })
-      await this.pool.query(`WITH delivery AS (UPDATE mail_sends SET status='sent',source=NULL WHERE mailbox_id=$1 AND request_id=$2 RETURNING request_id)
-        UPDATE postfold_activity SET data=jsonb_set(data,'{status}','"sent"') WHERE mailbox_id=$1 AND id IN (SELECT request_id FROM delivery)`, [this.mailboxId, input.requestId])
+      const sentCopy = await this.deliver('Reply', input, html, outgoing, [message.replyTo], { targetId: input.id, replyKey: `${message.threadId}:${message.messageId ?? input.id}`, digest, actor,
+        inReplyTo: message.messageId, references: [...(message.references ?? []), ...(message.messageId ? [message.messageId] : [])], assigneeId: states.find(item => item.id === input.id)?.assigneeId ?? null })
       await this.pool.query("UPDATE demo_conversation_state SET status='waiting', revision=revision+1 WHERE mailbox_id=$1 AND id=$2 AND status<>'waiting'", [this.mailboxId, input.id])
-      await this.pool.query(`INSERT INTO demo_conversation_state (mailbox_id,id,unread,status,project_id,label_ids,assignee_id)
-        SELECT $1,$2,false,'waiting',$3,ARRAY[]::text[],assignee_id FROM demo_conversation_state WHERE mailbox_id=$1 AND id=$4 ON CONFLICT DO NOTHING`, [this.mailboxId, outgoing.id, message.projectId, input.id])
-      let sentCopy = !this.account.saveSent
-      if (this.account.saveSent) {
-        const client = this.imap()
-        try { await client.connect(); sentCopy = !!await client.append(this.account.sentPath, raw, ['\\Seen'], date) }
-        catch (error) { sentCopy = false; this.log('warn', 'Sent copy could not be saved in {0}: {1}', this.account.sentPath, describeError(error)) }
-        finally { await client.logout().catch(() => client.close()) }
-      }
-      await this.pool.query('UPDATE mail_sends SET sent_copy=$3 WHERE mailbox_id=$1 AND request_id=$2', [this.mailboxId, input.requestId, sentCopy])
       return { status: 'sent' as const, sentCopy }
     }, 60_000)
+  }
+
+  // A new mail starts its own thread in INBOX; it is delivered and archived exactly like a reply.
+  async compose(input: unknown, actor?: Member) {
+    if (!isNewMailRequest(input)) throw new BadRequestException('Invalid mail.')
+    return this.exclusive(async () => {
+      const digest = hash(JSON.stringify([input.to, input.subject, input.text, input.html ?? '', input.attachments ?? []]))
+      const html = input.html === undefined ? undefined : cleanEmailHtml(input.html)
+      const { rows: attempts } = await this.pool.query('SELECT status, body_hash, sent_copy FROM mail_sends WHERE mailbox_id=$1 AND request_id=$2', [this.mailboxId, input.requestId])
+      if (attempts.length) {
+        if (attempts[0].body_hash !== digest) throw new ConflictException('Request ID already used for a different reply.')
+        if (attempts[0].status !== 'sent') throw new ConflictException('Delivery is pending or uncertain; inspect Sent before retrying. Automatic resend is blocked.')
+        return { status: 'sent' as const, sentCopy: attempts[0].sent_copy }
+      }
+      const id = `sent_${input.requestId}`, subject = cleanText(input.subject.trim())
+      const { rows: known } = await this.pool.query<{ data: CachedMessage['data'] }>(`SELECT data FROM mail_messages WHERE mailbox_id=$1 AND lower(data->>'replyTo')=ANY($2::text[]) ORDER BY data->>'sentAt' DESC LIMIT 50`, [this.mailboxId, input.to.map(email => email.toLowerCase())])
+      const name = (email: string) => contactsOf(known.map(row => row.data)).find(person => person.email.toLowerCase() === email.toLowerCase())?.name ?? email
+      const outgoing: CachedMessage['data'] = { id, projectId: 'inbox', contactId: `c_${hash(input.to[0].toLowerCase())}`, threadId: '', sentAt: '',
+        sender: { name: this.account.name || this.account.email, email: this.account.email }, participants: input.to.map(email => ({ name: name(email), email })),
+        subject, preview: cleanText(input.text.replace(/\s+/g, ' ').slice(0, 200)), body: input.text, time: '', status: 'waiting', assignee: null, unread: false, labelIds: [],
+        outgoing: true, imapReady: false, replyTo: input.to[0], references: [] }
+      const sentCopy = await this.deliver('Mail', input, html, outgoing, input.to, { targetId: id, replyKey: `new:${input.requestId}`, digest, actor, references: [], assigneeId: null })
+      return { status: 'sent' as const, sentCopy, id }
+    }, 60_000)
+  }
+
+  // SMTP delivery shared by replies and new mails: the send is reserved before SMTP so it is never sent twice, then archived
+  // with its conversation state and copied to Sent. Returns whether the Sent copy is confirmed.
+  private async deliver(kind: 'Reply' | 'Mail', input: { text: string; attachments?: MailAttachment[]; requestId: string }, html: string | undefined, draft: CachedMessage['data'], to: string[],
+    send: { targetId: string; replyKey: string; digest: string; actor?: Member; inReplyTo?: string; references: string[]; assigneeId: string | null }) {
+    const transport = this.smtp()
+    await transport.verify()
+    const messageId = `<${input.requestId}@${this.account.email.split('@')[1]}>`
+    const date = new Date()
+    // Same thread key as the import of the Sent copy, so the synchronized copy stays in this thread.
+    const outgoing: CachedMessage['data'] = { ...draft, messageId, sentAt: date.toISOString(), time: date.toISOString().slice(0, 10), threadId: draft.threadId || hash(messageId) }
+    const generated = await nodemailer.createTransport({ streamTransport: true, buffer: true }).sendMail({
+      from: { name: this.account.name, address: this.account.email }, to, subject: outgoing.subject, text: input.text, html, attachments: input.attachments?.map(a => ({ filename: a.filename, contentType: a.contentType, content: Buffer.from(a.content, 'base64') })), date, messageId,
+      inReplyTo: send.inReplyTo, references: send.references,
+      disableFileAccess: true, disableUrlAccess: true,
+    })
+    const raw = generated.message as Buffer
+    if (raw.length > MAX_MIME_BYTES) throw new BadRequestException('Message exceeds the archive size limit.')
+    // The send reservation and its trusted author must be durable before SMTP begins.
+    await this.pool.query(`WITH reserved AS (
+      INSERT INTO mail_sends (mailbox_id,request_id,target_id,reply_key,body_hash,status,data,source) VALUES ($1,$2,$3,$4,$5,'sending',$6,$8) RETURNING request_id
+    ) INSERT INTO postfold_activity (mailbox_id,id,conversation_id,actor,kind,data)
+      SELECT $1,request_id,$3,$7::jsonb,'reply','{"status":"sending"}'::jsonb FROM reserved`,
+      [this.mailboxId, input.requestId, send.targetId, send.replyKey, send.digest, outgoing, send.actor ? JSON.stringify({ id: send.actor.id, name: send.actor.name }) : null, raw])
+    try {
+      const delivered = await transport.sendMail({ envelope: { from: this.account.email, to }, raw })
+      if (!delivered.accepted?.length) throw new Error('No recipient accepted')
+      this.log('info', `${kind} sent to {0}`, to.join(', '))
+    } catch (error) {
+      this.log('error', `${kind} to {0} could not be confirmed: {1}`, to.join(', '), describeError(error))
+      await this.pool.query(`WITH delivery AS (UPDATE mail_sends SET status='uncertain' WHERE mailbox_id=$1 AND request_id=$2 RETURNING request_id)
+        UPDATE postfold_activity SET data=jsonb_set(data,'{status}','"uncertain"') WHERE mailbox_id=$1 AND id IN (SELECT request_id FROM delivery)`, [this.mailboxId, input.requestId])
+      throw new ConflictException('Delivery could not be confirmed. Do not resend; inspect Sent and the mail server. Your draft is preserved.')
+    }
+    await this.archiveMessage({ id: outgoing.id, path: this.account.sentPath, validity: '', uid: 0, raw_id: messageId, data: outgoing }, raw, ['\\Seen'], date,
+      { id: outgoing.id, revision: 0, unread: false, status: 'waiting', projectId: outgoing.projectId, labelIds: [], assigneeId: send.assigneeId })
+    await this.pool.query(`WITH delivery AS (UPDATE mail_sends SET status='sent',source=NULL WHERE mailbox_id=$1 AND request_id=$2 RETURNING request_id)
+      UPDATE postfold_activity SET data=jsonb_set(data,'{status}','"sent"') WHERE mailbox_id=$1 AND id IN (SELECT request_id FROM delivery)`, [this.mailboxId, input.requestId])
+    await this.pool.query(`INSERT INTO demo_conversation_state (mailbox_id,id,unread,status,project_id,label_ids,assignee_id)
+      VALUES ($1,$2,false,'waiting',$3,ARRAY[]::text[],$4) ON CONFLICT DO NOTHING`, [this.mailboxId, outgoing.id, outgoing.projectId, send.assigneeId])
+    let sentCopy = !this.account.saveSent
+    if (this.account.saveSent) {
+      const client = this.imap()
+      try { await client.connect(); sentCopy = !!await client.append(this.account.sentPath, raw, ['\\Seen'], date) }
+      catch (error) { sentCopy = false; this.log('warn', 'Sent copy could not be saved in {0}: {1}', this.account.sentPath, describeError(error)) }
+      finally { await client.logout().catch(() => client.close()) }
+    }
+    await this.pool.query('UPDATE mail_sends SET sent_copy=$3 WHERE mailbox_id=$1 AND request_id=$2', [this.mailboxId, input.requestId, sentCopy])
+    return sentCopy
   }
 
   override async onApplicationShutdown() { clearInterval(this.timer); await super.onApplicationShutdown() }

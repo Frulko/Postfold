@@ -5,7 +5,7 @@ import { isProjectSettings } from '../../shared/projects'
 import { isPreferences, type Preferences } from '../../shared/preferences'
 import { isActivityIds, isConversationUpdate } from '../../shared/conversation-state'
 import { getRequestHeader } from '@tanstack/react-start/server'
-import { isMailAccountUpdate, isReplyRequest, type MailAccountSettings } from '../../shared/mail-account'
+import { isMailAccountUpdate, isNewMailRequest, isReplyRequest, type MailAccountSettings } from '../../shared/mail-account'
 import { authMode } from '../../shared/auth'
 import { isArchiveId, isArchiveSearch, isArchiveRestore, isMessageRef, isAttachmentRef, type MailArchivePage, type MessageContent } from '../../shared/mail-archive'
 
@@ -120,15 +120,21 @@ export const searchContacts = createServerFn({ method: 'POST' })
 
 export const sendReply = createServerFn({ method: 'POST' })
   .validator((input: unknown) => { if (!isReplyRequest(input)) throw new Error('Invalid reply.'); return input })
-  .handler(async ({ data }): Promise<{ ok: boolean; sentCopy?: boolean; error?: string }> => {
-    if (process.env.MAILBOX_MODE !== 'imap') return { ok: false, error: 'No mailbox connected.' }
-    try {
-      const response = await fetch(apiPath('/reply'), { method: 'POST', headers: apiHeaders(), body: JSON.stringify(data), signal: AbortSignal.timeout(120_000) })
-      if (response.ok) return { ok: true, sentCopy: (await response.json()).sentCopy }
-      if ([400, 409, 503].includes(response.status)) return { ok: false, error: (await response.json()).message }
-    } catch { /* Preserve the draft and the request ID when delivery cannot be confirmed. */ }
-    return { ok: false, error: 'Delivery could not be confirmed. Do not resend; inspect Sent and the mail server. Your draft is preserved.' }
-  })
+  .handler(({ data }) => deliver('/reply', data))
+
+export const sendNewMail = createServerFn({ method: 'POST' })
+  .validator((input: unknown) => { if (!isNewMailRequest(input)) throw new Error('Invalid mail.'); return input })
+  .handler(({ data }) => deliver('/compose', data))
+
+async function deliver(path: string, data: unknown): Promise<{ ok: boolean; sentCopy?: boolean; error?: string }> {
+  if (process.env.MAILBOX_MODE !== 'imap') return { ok: false, error: 'No mailbox connected.' }
+  try {
+    const response = await fetch(apiPath(path), { method: 'POST', headers: apiHeaders(), body: JSON.stringify(data), signal: AbortSignal.timeout(120_000) })
+    if (response.ok) return { ok: true, sentCopy: (await response.json()).sentCopy }
+    if ([400, 409, 503].includes(response.status)) return { ok: false, error: (await response.json()).message }
+  } catch { /* Preserve the draft and the request ID when delivery cannot be confirmed. */ }
+  return { ok: false, error: 'Delivery could not be confirmed. Do not resend; inspect Sent and the mail server. Your draft is preserved.' }
+}
 
 export const getAuthoring = createServerFn({ method: 'GET' }).handler(async (): Promise<import('../../shared/authoring').AuthoringSettings> => {
   const response = await fetch(`${process.env.API_ORIGIN ?? 'http://127.0.0.1:4000'}/authoring`, { headers: apiHeaders(), signal: AbortSignal.timeout(15_000) })

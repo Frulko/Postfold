@@ -25,6 +25,7 @@ import { SyncProgressBanner } from '../components/sync-progress'
 import { searchHighlights } from '../../shared/search'
 
 const MailComposer = lazy(() => import('../components/mail-composer').then(module => ({ default: module.MailComposer })))
+const NewMail = lazy(() => import('../components/new-mail').then(module => ({ default: module.NewMail })))
 const AuthoringPage = lazy(() => import('../components/authoring-settings').then(module => ({ default: module.AuthoringPage })))
 
 export const Route = createFileRoute('/')({ loader: () => getDemoMailbox(), component: MailboxPage })
@@ -105,7 +106,8 @@ function MailboxPage() {
   const [query, setQuery] = useState('')
   const [labelId, setLabelId] = useState<string | null>(null)
   const [memberId, setMemberId] = useState<string | null>(null)
-  const [view, setView] = useState<'mail' | 'contacts' | 'settings'>('mail')
+  const [view, setView] = useState<'mail' | 'contacts' | 'settings' | 'compose'>('mail')
+  const [newMailTo, setNewMailTo] = useState<string>()
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('templates')
   const [status, setStatus] = useState('all')
   const [selectedId, setSelectedId] = useState('')
@@ -659,6 +661,19 @@ function MailboxPage() {
     finally { sending.current = false; setSendBusy(false) }
   }
 
+  function writeTo(email?: string) {
+    if (!preserveDraft()) return
+    setComposerOpen(false); setNotice(''); clearSelection()
+    setNewMailTo(email); setView('compose')
+  }
+
+  function newMailSent(id: string, sentCopy: boolean) {
+    setView('mail')
+    setNotice(t(sentCopy ? "Mail accepté par le serveur SMTP." : "Mail accepté par SMTP ; copie dans Envoyés non confirmée. Ne renvoyez pas le mail."))
+    void refreshMailbox(false).then(fresh => { if (fresh.conversations.some(item => item.id === id)) setSelectedId(id) })
+      .catch(() => { setConversationFailed(true); setConversationFeedback(t("Actualisation impossible. Vos données restent affichées.")) })
+  }
+
   function selectProject(id: string | null, threadId?: string) {
     // Opening a folder opens no mail: a mail is marked read only when someone clicks it.
     if (threadId ? !openConversation(threadId, true) : !preserveDraft()) return
@@ -739,6 +754,7 @@ function MailboxPage() {
         <a className="brand" href={`/?lang=${locale}`} aria-label={t("Postfold, accueil")}><img className="brand-mark" src="/icon.svg" width="30" height="30" alt="" />Postfold<span className="brand-label">{t("Support")}</span></a>
         <div className="workspace-name"><span className="workspace-avatar">S</span><div>{t("Équipe support")}<small>{mailbox.connection?.email ?? t("Espace de démonstration")}</small></div></div>
         <nav className="main-nav">
+          <button className={view === 'compose' ? 'nav-button active' : 'nav-button'} onClick={() => writeTo()}><Icon name="edit" />{t("Nouveau mail")}</button>
           <button className={view === 'mail' && !projectId ? 'nav-button active' : 'nav-button'} onClick={() => selectProject(null)}><Icon name="mail" />{t("Boîte de réception")}<b>{mailbox.counts ? displayMode === 'threads' ? mailbox.counts.threads : mailbox.counts.messages : mailboxRows(mailbox.conversations, displayMode).length}</b></button>
           <button className={view === 'contacts' ? 'nav-button active' : 'nav-button'} onClick={() => { if (!preserveDraft()) return; setView('contacts'); setComposerOpen(false); setNotice(''); clearSelection() }}><Icon name="users" />{t("Contacts")}{windowed ? null : <b>{mailbox.contacts.length}</b>}</button>
           <button className={view === 'settings' ? 'nav-button active' : 'nav-button'} onClick={() => { if (!preserveDraft()) return; setView('settings'); setComposerOpen(false); clearSelection() }}><Icon name="settings" />{t('Réglages')}</button>
@@ -755,7 +771,7 @@ function MailboxPage() {
 
       <main className="main">
         <header className="topbar">
-          <div className="breadcrumb"><span>{t("Support")}</span><Icon name="chevron" /><strong>{view === 'settings' ? t('Gestion de la boîte') : view === 'contacts' ? t("Contacts") : selectedProject?.name ?? t("Tous les échanges")}</strong></div>
+          <div className="breadcrumb"><span>{t("Support")}</span><Icon name="chevron" /><strong>{view === 'settings' ? t('Gestion de la boîte') : view === 'compose' ? t('Nouveau mail') : view === 'contacts' ? t("Contacts") : selectedProject?.name ?? t("Tous les échanges")}</strong></div>
           <div className="header-indicators">
             <select className="language-switch" aria-label={t("Langue")} value={locale} onChange={(event) => { setConversationFeedback(''); setFolderFeedback(''); setNotice(''); void navigate({ search: { lang: event.target.value === 'en' ? 'en' : 'fr' }, replace: true }) }}><option value="fr">FR</option><option value="en">EN</option></select>
             <MailboxRefresh onRefresh={refreshMailbox} connected={!!mailbox.connection} online={online} automatic={local.autoRefresh ?? true} onAutomaticChange={(autoRefresh) => save({ ...localRef.current, autoRefresh })} />
@@ -781,7 +797,8 @@ function MailboxPage() {
         {mailbox.connection ? <SyncProgressBanner onCycle={() => { void refreshMailbox(false).catch(() => {}) }} /> : null}
         {error ? <div role="alert" className="error-banner">{error}</div> : null}
         {conversationFeedback ? <div role={conversationFailed ? 'alert' : 'status'} className={`conversation-feedback ${conversationFailed ? 'failed' : ''}`}>{conversationFeedback}</div> : null}
-        {view === 'settings' ? <Suspense fallback={<p>{t('Chargement…')}</p>}><AuthoringPage projects={mailbox.projects} connected={!!mailbox.connection} tab={settingsTab} onTab={setSettingsTab} onUpdated={() => { void refreshMailbox(false) }} /></Suspense> : <div className="content-grid" data-contact-collapsed={contactCollapsed}>
+        {view === 'compose' ? <Suspense fallback={<p>{t('Chargement…')}</p>}><NewMail key={newMailTo ?? ''} contacts={mailbox.contacts} windowed={windowed} storageKey={storageKey} connected={!!mailbox.connection} online={online} initialTo={newMailTo} onClose={() => setView('mail')} onSent={newMailSent} /></Suspense> :
+        view === 'settings' ? <Suspense fallback={<p>{t('Chargement…')}</p>}><AuthoringPage projects={mailbox.projects} connected={!!mailbox.connection} tab={settingsTab} onTab={setSettingsTab} onUpdated={() => { void refreshMailbox(false) }} /></Suspense> : <div className="content-grid" data-contact-collapsed={contactCollapsed}>
           <section className="conversation-list" aria-label={view === 'contacts' ? t("Liste des contacts") : t("Liste des conversations")} onKeyDown={(event) => {
             if (view !== 'mail' || (event.target as HTMLElement).closest('textarea, select, input:not([type="checkbox"])')) return
             if (event.key === 'Escape') clearSelection()
@@ -899,6 +916,7 @@ function MailboxPage() {
             {view === 'mail' && participants.length > 1 ? <div className="thread-participants" role="group" aria-label={t("Participants de la conversation")}><h3>{t("Participants")} <span>{participants.length}</span></h3>{participants.map((person) => <button key={person.id} aria-pressed={person.id === contact.id} onClick={() => { setInspectedContact({ threadId: threadKey(conversation), id: person.id }); setNotice('') }}><span className="contact-avatar">{initials(person.name)}</span><span><strong>{person.name}</strong><small>{person.email}</small></span></button>)}</div> : null}
             <div className="profile-avatar">{initials(contact.name)}</div><h2>{contact.name}</h2><p className="company">{contact.company}</p>
             <dl className="contact-details"><dt>{t("Email")}</dt><dd>{contact.email}</dd><dt>{t("Téléphone")}</dt><dd>{contact.phone}</dd></dl>
+            {contact.email ? <button className="secondary-button contact-write" onClick={() => writeTo(contact.email)}><Icon name="edit" />{t("Écrire un mail")}</button> : null}
             <div className="panel-section"><h3>{t("Projets associés")}</h3>{mailbox.projects.filter((item) => mailbox.conversations.some((thread) => includesContact(thread, contact) && thread.projectId === item.id)).map((item) => <button key={item.id} className="linked-project" onClick={() => selectProject(item.id)}><span className="project-dot" style={{ backgroundColor: projectColor(item.color) }} /><span>{projectPath(mailbox.projects, item.id)}</span><Icon name="arrow" /></button>)}</div>
             <div className="panel-section"><h3>{t("Notes internes")} <span>{contactNotes.length}</span></h3>{contactNotes.map((item) => <article className="contact-note" key={item.id}><p>{item.body}</p><small>{mailbox.connection ? t("Note locale") : "Julie"} · {new Date(item.createdAt).toLocaleDateString(locale === 'en' ? 'en-GB' : 'fr-FR')}</small></article>)}
               <form onSubmit={(event) => { event.preventDefault(); const body = note.trim(); if (!body) return; if (save({ ...local, notes: [...local.notes, { id: crypto.randomUUID(), contactId: contact.id, body, createdAt: new Date().toISOString() }] })) { setNote(''); setNotice(t("Note enregistrée dans ce navigateur.")) } }}>

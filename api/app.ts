@@ -124,6 +124,7 @@ class MailboxController {
   @Post('conversations/activity') @HttpCode(200) activity(@Body() ids: unknown) { return this.mailbox.activity(ids) }
   @Post('presence') @HttpCode(200) presence(@Body() input: unknown, @Req() request: AuthRequest) { return reportPresence(request.viewer, input) }
   @Post('reply') reply(@Body() input: unknown, @Req() request: AuthRequest) { return this.mailbox.reply(input, request.viewer) }
+  @Post('compose') compose(@Body() input: unknown, @Req() request: AuthRequest) { return this.mailbox.compose(input, request.viewer) }
   @Get('account') account(@Req() request: AuthRequest) { return this.mailbox.accountSettings(request.viewer) }
   @Get('image') async image(@Query('url') url: string, @Res() response: { status(code: number): { end(): void }; setHeader(name: string, value: string): void; send(value: Buffer): void }) {
     try {

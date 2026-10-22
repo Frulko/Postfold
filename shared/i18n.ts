@@ -1,6 +1,25 @@
 export type Locale = 'fr' | 'en'
 
 const english: Record<string, string> = {
+  "{0} a été ajouté au brouillon en cours.": "{0} was added to the draft in progress.",
+  "Nouveau mail": "New mail",
+  "Le brouillon reste sur cet appareil jusqu’à l’envoi.": "The draft stays on this device until it is sent.",
+  "À": "To",
+  "Retirer {0}": "Remove {0}",
+  "nom@exemple.fr": "name@example.com",
+  "Objet": "Subject",
+  "Votre message": "Your message",
+  "Carnet de contacts": "Address book",
+  "Rechercher un contact…": "Search contacts…",
+  "Aucun contact ne correspond.": "No contact matches.",
+  "{0} destinataire{1}": "{0} recipient(s)",
+  "Adresse invalide : {0}": "Invalid address: {0}",
+  "Ajoutez au moins un destinataire.": "Add at least one recipient.",
+  "Ajoutez un objet.": "Add a subject.",
+  "Validez ou effacez l’adresse en cours de saisie.": "Confirm or clear the address being typed.",
+  "Mail accepté par le serveur SMTP.": "Mail accepted by the SMTP server.",
+  "Mail accepté par SMTP ; copie dans Envoyés non confirmée. Ne renvoyez pas le mail.": "Mail accepted by SMTP; Sent copy could not be confirmed. Do not resend.",
+  "Écrire un mail": "Write an email",
   "Un dossier créé ou modifié a un nom invalide (1 à 100 caractères, sans / ni \\), un nom déjà utilisé à son niveau ou plus de 8 niveaux.": "A created or changed folder has an invalid name (1 to 100 characters, without / or \\), a name already used at its level, or more than 8 levels.",
   "Journal": "Log",
   "Ce que fait le serveur, en direct : relèves, envois, déplacements et erreurs.": "What the server is doing, live: synchronization, sending, moves and errors.",
@@ -557,6 +576,9 @@ const english: Record<string, string> = {
 export const parseLocale = (value: unknown): Locale => value === 'en' ? 'en' : 'fr'
 
 const french: Record<string, string> = {
+  "Mail sent to {0}": "Mail envoyé à {0}",
+  "Mail to {0} could not be confirmed: {1}": "Envoi du mail à {0} non confirmé : {1}",
+  "Invalid mail.": "Mail invalide : vérifiez les destinataires, l’objet et le message.",
   "A created or changed folder needs a name of 1 to 100 characters without / or \\, unique at its level, at most 8 levels deep.": "Un dossier créé ou modifié doit avoir un nom de 1 à 100 caractères sans / ni \\, unique à son niveau, à 8 niveaux au plus.",
   "Synchronization started": "Relève démarrée",
   "Synchronization finished in {0} s: {1} new, {2} messages in {3} folders": "Relève terminée en {0} s : {1} nouveau(x), {2} mails dans {3} dossiers",

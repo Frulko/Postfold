@@ -267,6 +267,33 @@ try {
   const largeSent = mailbox.conversations.find(item => item.id === `sent_${largeReply.requestId}`)
   assert.equal(largeSent.imapReady, true, 'A sent MIME copy above 10 MiB must still synchronize within the 16 MiB import bound')
   console.info('Large attachment MIME overhead and native Sent synchronization: passed')
+  const newMail = { to: ['customer@postfold.test', 'manager@postfold.test'], subject: 'Onboarding checklist', text: 'Here is the checklist.', html: '<p>Here is the <em>checklist</em>.</p><script>unsafe()</script>', requestId: randomUUID() }
+  await assert.rejects(store.compose({ ...newMail, to: [] }), /Invalid mail/)
+  await assert.rejects(store.compose({ ...newMail, to: ['customer@postfold.test', 'Customer@postfold.test'] }), /Invalid mail/)
+  await assert.rejects(store.compose({ ...newMail, subject: ' ' }), /Invalid mail/)
+  const composed = await store.compose(newMail, supportActor)
+  assert.deepEqual(composed, { status: 'sent', sentCopy: true, id: `sent_${newMail.requestId}` })
+  assert.deepEqual(await store.compose(newMail, supportActor), { status: 'sent', sentCopy: true }, 'Replaying a sent request must not send it again')
+  await assert.rejects(store.compose({ ...newMail, text: 'Another mail' }), /different reply/)
+  const newMailReader = new ImapFlow({ host: 'localhost', port: imapPort, secure: true, auth: { user: 'customer', pass: 'test-only-customer-password' }, tls, logger: false })
+  newMailReader.on('error', () => {})
+  try {
+    await newMailReader.connect(); const lock = await newMailReader.getMailboxLock('INBOX')
+    try {
+      const copies = (await newMailReader.fetchAll('1:*', { envelope: true, source: true })).filter(item => item.envelope.subject === newMail.subject)
+      assert.equal(copies.length, 1, 'A new mail must reach the recipient exactly once')
+      const parsed = await (await import('mailparser')).simpleParser(copies[0].source)
+      assert.deepEqual(parsed.to.value.map(person => person.address), newMail.to)
+      assert.equal(parsed.inReplyTo, undefined, 'A new mail starts its own thread')
+      assert.ok(parsed.html.includes('<em>checklist</em>') && !parsed.html.includes('script'))
+    } finally { lock.release() }
+  } finally { await newMailReader.logout().catch(() => newMailReader.close()) }
+  mailbox = await store.sync()
+  const newSent = mailbox.conversations.filter(item => item.subject === newMail.subject)
+  assert.equal(newSent.length, 1, 'The Sent copy must synchronize onto the mail already shown, not a second one')
+  assert.deepEqual([newSent[0].id, newSent[0].outgoing, newSent[0].imapReady, newSent[0].status], [`sent_${newMail.requestId}`, true, true, 'waiting'])
+  assert.deepEqual(newSent[0].participants.map(person => person.email), newMail.to)
+  console.info('New mail from scratch: validation, delivery to every recipient, idempotency and Sent synchronization: passed')
   const recoveryClient = new ImapFlow({ host: 'localhost', port: imapPort, secure: true, auth: { user: 'support', pass: 'test-only-mail-password' }, tls, logger: false })
   recoveryClient.on('error', () => {})
   const archiveMessageId = `<${randomUUID()}@postfold.test>`

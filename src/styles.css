@@ -414,8 +414,8 @@ textarea { width: 100%; border: 1px solid var(--line); border-radius: 7px; paddi
   .brand { grid-column: 1 / -1; padding: 0; }
   .brand-label { display: inline-block; margin-left: 4px; }
   .workspace-name, .sidebar-bottom, .sidebar > .section-label { display: none; }
-  .main-nav { display: flex; grid-column: 1 / -1; margin: 0; }
-  .nav-button { width: auto; }
+  .main-nav { display: flex; grid-column: 1 / -1; margin: 0; overflow-x: auto; scrollbar-width: none; }
+  .nav-button { width: auto; flex-shrink: 0; white-space: nowrap; }
   .folder-section { display: block; min-height: 0; margin-top: 0; }
   .folder-content { display: block; }
   .folder-tools { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
@@ -770,3 +770,34 @@ textarea { width: 100%; border: 1px solid var(--line); border-radius: 7px; paddi
 .log-error { background: #fef2f2; } .log-error .log-level { color: #b91c1c; }
 .log-list .log-empty { display: block; color: var(--muted); font-family: inherit; }
 @media (max-width: 820px) { .log-list li { grid-template-columns: auto 1fr; } .log-list li > span:last-child { grid-column: 1 / -1; } }
+.new-mail { max-width: 920px; }
+.new-mail-fields { display: grid; gap: 1px; margin-bottom: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--line); overflow: hidden; }
+.new-mail-row { display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: #fff; }
+.new-mail-row > label { width: 48px; flex-shrink: 0; font-size: 12px; color: var(--muted); }
+.new-mail-row > input, .recipient-field input { flex: 1; min-width: 140px; min-height: 40px; border: 0; background: transparent; font-size: 14px; }
+.new-mail-row > input:focus-visible, .recipient-field input:focus-visible { outline: none; }
+.new-mail-row:focus-within { box-shadow: inset 2px 0 0 var(--accent); }
+.recipient-field { display: flex; flex: 1; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.recipient-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-height: 30px; padding: 2px 2px 2px 10px; border: 1px solid var(--line); border-radius: 999px; background: #fafafa; font-size: 12px; }
+.recipient-chip strong { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recipient-chip small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recipient-chip button { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 999px; }
+.recipient-chip button:hover:not(:disabled) { background: #e4e4e7; }
+.recipient-chip .icon { width: 12px; height: 12px; }
+.new-mail .composer { margin-top: 0; }
+.address-book { width: min(520px, calc(100vw - 32px)); max-height: min(640px, calc(100dvh - 32px)); padding: 0; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 24px 80px #18181b30; color: inherit; }
+.address-book[open] { display: flex; flex-direction: column; }
+.address-book::backdrop { background: #18181b40; }
+.address-book header, .address-book footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; }
+.address-book header h2 { margin: 0; font-size: 16px; }
+.address-book footer { border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+.address-book > input { margin: 0 16px 8px; min-height: 40px; padding: 0 12px; border: 1px solid var(--line); border-radius: 7px; font-size: 14px; }
+.address-book ul { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 0 8px; list-style: none; }
+.address-book li label { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 6px 8px; border-radius: 7px; cursor: pointer; }
+.address-book li label:hover { background: #f4f4f5; }
+.address-book li span { display: grid; min-width: 0; }
+.address-book li strong { font-size: 13px; font-weight: 500; }
+.address-book li small { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.address-book .empty-state { padding: 16px; }
+.contact-write { width: 100%; gap: 6px; margin-bottom: 20px; }
+@media (max-width: 820px) { .new-mail-row { flex-wrap: wrap; } .new-mail-row > label { width: 32px; } .recipient-field { flex: 1 1 calc(100% - 42px); } .new-mail-row > .secondary-button { margin-left: auto; } }
