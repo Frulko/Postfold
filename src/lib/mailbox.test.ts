@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { filterConversations, filterProjects, formatMailTime, highlightParts, linkParts, moveConversations, splitQuoted, suggestProjects, updateSelection, type Mailbox } from './mailbox.ts'
+import { avatarColor, avatarColors, filterConversations, filterProjects, formatMailTime, highlightParts, linkParts, moveConversations, splitQuoted, suggestProjects, updateSelection, type Mailbox } from './mailbox.ts'
 import { parseSearch, typoBudget, typoDistance } from '../../shared/search.ts'
 import { isProjectSettings, positionProject, prepareProject, sortProjects } from '../../shared/projects.ts'
 import { applyConversationStates, isConversationUpdate, mergeConversationStates } from '../../shared/conversation-state.ts'
@@ -261,4 +261,12 @@ test('mail dates always show the time, with the day when it is not today', () =>
   assert.equal(formatMailTime(at(2026, 9, 8, 10, 0), 'en', now), '8 Oct 10:00')
   assert.equal(formatMailTime(at(2025, 11, 31, 8, 45), 'fr', now), '31 déc. 2025 08:45')
   assert.equal(formatMailTime(undefined, 'fr', now), null)
+})
+
+test('avatar colours follow the email and stay apart within a thread', () => {
+  assert.deepEqual(avatarColor(' Paul@Example.test'), avatarColor('paul@example.test'))
+  const people = Array.from({ length: 8 }, (_, index) => `person${index}@example.test`)
+  const color = avatarColors(people)
+  assert.equal(new Set(people.map((email) => color(email).backgroundColor)).size, 8, 'Eight people get eight colours')
+  assert.deepEqual(color('outsider@example.test'), avatarColor('outsider@example.test'))
 })

@@ -55,7 +55,7 @@ In manual sort mode, drag a grip above or below a sibling to reorder it. Drop in
 
 ### Messages or conversation threads
 
-Choose **All messages** to list each email separately, with direct reply controls; opening one also shows the earlier mails of its thread, collapsed. Choose **Conversations** to group messages by explicit thread ID, show the latest preview and activity, and expand individual messages in the reader. Matching subjects alone never merge unrelated messages.
+Choose **All messages** to list each email separately, with direct reply controls; opening one also shows the earlier mails of its thread, collapsed. The address bar follows the open folder and mail: a refresh reopens them, and Back and Forward move between them. Choose **Conversations** to group messages by explicit thread ID, show the latest preview and activity, and expand individual messages in the reader. Matching subjects alone never merge unrelated messages.
 
 Display mode and list/thread ordering are saved independently in this browser. The list defaults to newest activity first. Threads default to oldest first and open at the latest message, like a messaging conversation; either order can be changed. Existing saved choices are kept.
 

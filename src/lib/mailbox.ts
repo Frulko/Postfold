@@ -31,6 +31,37 @@ export function filterConversations(mailbox: Mailbox, projectId: string | null, 
   })
 }
 
+// A person keeps the same colour everywhere: a hash (FNV-1a) of the name and email picks one of 8 OKLCH hues 45° apart, each at the
+// strongest chroma sRGB holds for that hue. The closest pair stays about twice the just-noticeable difference and the text
+// keeps 6.6:1 contrast or more. Entries: hue, then chroma of background (L 0.9), text (L 0.4) and border (L 0.82).
+const avatarPalette = [[25, 0.043, 0.138, 0.085], [70, 0.064, 0.074, 0.09], [105, 0.07, 0.072, 0.09], [145, 0.07, 0.108, 0.09],
+  [185, 0.07, 0.06, 0.09], [235, 0.047, 0.072, 0.089], [280, 0.04, 0.14, 0.077], [330, 0.07, 0.14, 0.09]]
+const avatarSlot = (seed: string) => {
+  let hash = 0x811c9dc5
+  for (const char of seed.trim().toLowerCase()) hash = Math.imul(hash ^ char.codePointAt(0)!, 0x01000193)
+  return (hash >>> 0) % avatarPalette.length
+}
+const avatarStyle = (slot: number) => {
+  const [hue, background, text, border] = avatarPalette[slot]
+  return { backgroundColor: `oklch(0.9 ${background} ${hue})`, color: `oklch(0.4 ${text} ${hue})`, borderColor: `oklch(0.82 ${border} ${hue})` }
+}
+export const avatarColor = (seed: string) => avatarStyle(avatarSlot(seed))
+// The name counts too: colleagues answering from the shared address are different people.
+export const avatarSeed = (person: { name?: string; email?: string }) => `${person.name ?? ''} ${person.email ?? ''}`
+
+// People shown together never share a colour while one is free: in email order, a taken colour passes to the next free one.
+export function avatarColors(seeds: string[]) {
+  const taken = new Set<number>()
+  const colors = new Map<string, ReturnType<typeof avatarStyle>>()
+  for (const seed of [...new Set(seeds.map((item) => item.trim().toLowerCase()))].sort()) {
+    let slot = avatarSlot(seed)
+    for (let step = 0; taken.has(slot) && step < avatarPalette.length; step++) slot = (slot + 1) % avatarPalette.length
+    taken.add(slot)
+    colors.set(seed, avatarStyle(slot))
+  }
+  return (seed: string) => colors.get(seed.trim().toLowerCase()) ?? avatarColor(seed)
+}
+
 export function updateSelection(current: string[], visible: string[], id: string, checked: boolean, anchor: string | null, range: boolean) {
   if (!visible.includes(id)) return current
   const start = anchor ? visible.indexOf(anchor) : -1

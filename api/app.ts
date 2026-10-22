@@ -115,7 +115,7 @@ class AuthController {
 class MailboxController {
   constructor(@Inject(MailStore) private readonly mailbox: MailStore) {}
   // Preferences need an identity: with the shared basic-auth gate they stay in each browser.
-  @Get() async read(@Req() request: AuthRequest) { const [mailbox, members] = await Promise.all([this.mailbox.mailbox({}), this.mailbox.members(request.viewer)]); return { ...mailbox, members, preferences: await this.mailbox.preferences(request.viewer), currentMemberId: request.viewer?.id, ...(request.viewer ? { viewer: request.viewer } : {}) } }
+  @Get() async read(@Req() request: AuthRequest) { const [mailbox, members] = await Promise.all([this.mailbox.mailbox({ projectId: 'inbox' }), this.mailbox.members(request.viewer)]); return { ...mailbox, members, preferences: await this.mailbox.preferences(request.viewer), currentMemberId: request.viewer?.id, ...(request.viewer ? { viewer: request.viewer } : {}) } }
   // Starts a cycle in the background: large imports report through progress instead of holding the request open.
   @Post('sync') @HttpCode(200) async sync(@Body() query: unknown, @Req() request: AuthRequest) { this.mailbox.requestSync('manual'); const [mailbox, members] = await Promise.all([this.mailbox.mailbox(query ?? {}), this.mailbox.members(request.viewer)]); return { ...mailbox, members, currentMemberId: request.viewer?.id, ...(request.viewer ? { viewer: request.viewer } : {}) } }
   @Put('projects') projects(@Body() input: unknown) { return this.mailbox.update(input) }
