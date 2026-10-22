@@ -24,7 +24,7 @@ export function suggestProjects(projects: Project[], messages: Pick<Conversation
 export function filterConversations(mailbox: Mailbox, projectId: string | null, query: string) {
   const needle = searchable(query.trim())
   return mailbox.conversations.filter((conversation) => {
-    if (projectId && conversation.projectId !== projectId && !projectPath(mailbox.projects, conversation.projectId).startsWith(`${projectPath(mailbox.projects, projectId)} /`)) return false
+    if (projectId && conversation.projectId !== projectId && (projectId === 'inbox' || !projectPath(mailbox.projects, conversation.projectId).startsWith(`${projectPath(mailbox.projects, projectId)} /`))) return false
     const contact = mailbox.contacts.find((item) => item.id === conversation.contactId)
     return searchable([conversation.subject, conversation.preview, contact?.name, contact?.email,
       contact?.company, conversation.sender?.name, conversation.sender?.email, ...(conversation.participants ?? []).flatMap((person) => [person.name, person.email]), conversation.projectId, projectPath(mailbox.projects, conversation.projectId)].join(' ')).includes(needle)

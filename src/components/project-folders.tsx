@@ -54,10 +54,10 @@ export function ProjectFolders({ mailbox, opened, onOpenedChange, counts, revisi
   const collapsed = [...children.keys()].filter((key): key is string => !!key && !isOpen(key))
   const collapsedKey = collapsed.join('\n')
   const visible = useMemo(() => projectTree(mailbox.projects, sort, order, collapsedKey ? collapsedKey.split('\n') : [], query), [mailbox.projects, sort, order, collapsedKey, query])
-  // Folder badges include subfolders. Live mailboxes send per-folder totals; the demo counts its loaded conversations.
+  // Folder badges include subfolders, except INBOX which lists its own mail only. Live mailboxes send per-folder totals; the demo counts its loaded conversations.
   const totals = new Map<string, number>()
   const direct = counts ? Object.entries(counts) : [...mailbox.conversations.reduce((tally, item) => tally.set(item.projectId, (tally.get(item.projectId) ?? 0) + 1), new Map<string, number>())]
-  for (const [folderId, count] of direct) for (let id: string | null = folderId, depth = 0; id && depth < 100; id = parents.get(id) ?? null, depth++) totals.set(id, (totals.get(id) ?? 0) + count)
+  for (const [folderId, count] of direct) for (let id: string | null = folderId, depth = 0; id && depth < 100; id = parents.get(id) ?? null, depth++) if (id === folderId || id !== 'inbox') totals.set(id, (totals.get(id) ?? 0) + count)
   const siblings = children.get(input.parentId ?? null) ?? []
   const siblingCount = siblings.filter((item) => item.id !== editingId).length
   // Manual order is a personal view: it works offline and never reaches the mail server.

@@ -40,8 +40,10 @@ const handledActivity = `kind = 'reply' OR ${['status', 'projectId', 'labelIds',
 // Diacritic-insensitive search like the browser filter; PostgreSQL extensions such as unaccent are not required.
 const searchable = (value: string) => value.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase('fr')
 const searchText = `lower(translate(concat_ws(' ', m.data->>'subject', m.data->>'preview', m.data->'sender'->>'name', m.data->'sender'->>'email', m.data->>'replyTo', m.data->>'participants'), 'ÀÂÄÁÃÅÉÈÊËÍÌÎÏÓÒÔÖÕÚÙÛÜÇÑÝàâäáãåéèêëíìîïóòôöõúùûüçñýÿ', 'AAAAAAEEEEIIIIOOOOOUUUUCNYaaaaaaeeeeiiiiooooouuuucnyy'))`
+// INBOX lists its own mail only: servers that nest every folder under it would otherwise list the whole mailbox.
 const descendantIds = (projects: Project[], id: string) => {
   const ids = [id]
+  if (id === 'inbox') return ids
   for (let index = 0; index < ids.length; index++) for (const project of projects) if (project.parentId === ids[index]) ids.push(project.id)
   return ids
 }

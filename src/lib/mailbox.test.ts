@@ -124,6 +124,8 @@ test('nested folders reject cycles and duplicate siblings and expose descendant 
   const mailbox: Mailbox = { projects, contacts: [], conversations: [{ id: 'mail', contactId: 'p', projectId: 'archive', subject: 'VPN', preview: '', body: '', time: '', status: 'open', unread: true, assignee: null }] }
   assert.equal(filterConversations(mailbox, '1', '').length, 1)
   assert.equal(filterConversations(mailbox, 'plans', '').length, 1)
+  const nestedInbox: Mailbox = { ...mailbox, projects: [{ id: 'inbox', name: 'INBOX', color: 'blue' }, { ...projects[0], parentId: 'inbox' }, ...projects.slice(1)] }
+  assert.equal(filterConversations(nestedInbox, 'inbox', '').length, 0, 'INBOX excludes its subfolders')
   assert.equal(isProjectChange(projects, { id: 'copy', name: 'plans', color: 'rose', parentId: '1' }), false)
   assert.equal(isProjectTree(projects.map((item) => item.id === '1' ? { ...item, parentId: 'archive' } : item)), false)
   assert.equal(isProjectTree([{ ...projects[1], parentId: 'absent' }]), false)
