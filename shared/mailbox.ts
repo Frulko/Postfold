@@ -64,7 +64,7 @@ export function isMailboxQuery(value: unknown): value is MailboxQuery {
 export type MailboxPage = { total: number; nextCursor: string | null; corrections?: string[] }
 export type MailboxCounts = { messages: number; threads: number; labels: Record<string, number>; folders: Record<string, number> }
 
-export type DemoMailbox = Mailbox & { preferences?: import('./preferences.js').Preferences | null; page?: MailboxPage; counts?: MailboxCounts; viewer?: import('./auth.js').Viewer; members?: Member[]; currentMemberId?: string; projectSettings: Omit<ProjectSettings, 'projects'>; conversationStates: ConversationState[]; connection?: { mode: 'imap'; email: string; lastSync: string | null; error: boolean; maxMessagesPerSync: number }; deliveries?: { targetId: string; status: 'sending' | 'sent' | 'uncertain'; sentCopy: boolean }[] }
+export type DemoMailbox = Mailbox & { preferences?: import('./preferences.js').Preferences | null; page?: MailboxPage; counts?: MailboxCounts; viewer?: import('./auth.js').Viewer; members?: Member[]; currentMemberId?: string; projectSettings: Omit<ProjectSettings, 'projects'>; conversationStates: ConversationState[]; connection?: { mode: 'imap'; email: string; lastSync: string | null; error: boolean; maxMessagesPerSync: number; trashId?: string | null }; deliveries?: { targetId: string; status: 'sending' | 'sent' | 'uncertain'; sentCopy: boolean }[] }
 
 // Live view of the background synchronization; `stored` counts messages whose complete copy is in PostgreSQL.
 export type SyncProgress = {
@@ -77,6 +77,8 @@ export type SyncProgress = {
   total: number
   rate: number | null
   lastCycle: { finishedAt: string; seconds: number; imported: number; complete: boolean } | null
+  // Moves when the mailbox changed: new mail from a cycle, or a change made in Postfold.
+  changedAt: string | null
   error: string | null
 }
 

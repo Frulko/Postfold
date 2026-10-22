@@ -38,6 +38,7 @@ const paths = {
   edit: 'm16 3 5 5M3 21l5-1L21 7a2 2 0 0 0-4-4L4 16l-1 5Z',
   tag: 'M3 3h8l10 10-8 8L3 11V3Zm4 4h.01',
   history: 'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2',
+  trash: 'M3 6h18M8 6V4h8v2M6 6l1 15h10l1-15M10 11v6M14 11v6',
 }
 
 export function Icon({ name }: { name: keyof typeof paths }) {

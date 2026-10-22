@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { avatarColor, avatarColors, filterConversations, filterProjects, formatMailTime, highlightParts, linkParts, moveConversations, splitQuoted, suggestProjects, updateSelection, type Mailbox } from './mailbox.ts'
+import { avatarColor, avatarColors, distinctMails, filterConversations, filterProjects, formatMailTime, highlightParts, linkParts, moveConversations, splitQuoted, suggestProjects, updateSelection, type Mailbox } from './mailbox.ts'
 import { parseSearch, typoBudget, typoDistance } from '../../shared/search.ts'
 import { isProjectSettings, positionProject, prepareProject, sortProjects } from '../../shared/projects.ts'
 import { applyConversationStates, isConversationUpdate, mergeConversationStates } from '../../shared/conversation-state.ts'
@@ -269,4 +269,11 @@ test('avatar colours follow the email and stay apart within a thread', () => {
   const color = avatarColors(people)
   assert.equal(new Set(people.map((email) => color(email).backgroundColor)).size, 8, 'Eight people get eight colours')
   assert.deepEqual(color('outsider@example.test'), avatarColor('outsider@example.test'))
+})
+
+test('two copies of one mail show once, keeping the opened copy', () => {
+  const mail = (id: string, messageId?: string) => ({ id, messageId, projectId: 'sent', contactId: 'c', subject: 'Re', preview: '', body: '', time: '', status: 'waiting' as const, assignee: null, unread: false })
+  const copies = [mail('a', '<x@test>'), mail('b', '<x@test>'), mail('c'), mail('d')]
+  assert.deepEqual(distinctMails(copies).map((item) => item.id), ['a', 'c', 'd'])
+  assert.deepEqual(distinctMails(copies, 'b').map((item) => item.id), ['b', 'c', 'd'])
 })

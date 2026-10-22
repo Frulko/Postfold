@@ -47,7 +47,6 @@ try {
   browser('open', 'http://127.0.0.1:3002/?lang=en')
   browser('set', 'viewport', '1440', '1440')
   browser('wait', '.thread-row[draggable="true"]')
-  browser('uncheck', '.auto-refresh input')
   evaluate(`window.__dragEvents=[]; for (const type of ['dragstart','drop']) document.addEventListener(type, e => window.__dragEvents.push({
     type, id:e.target.closest('[data-project-id]')?.dataset.projectId,
     count:document.querySelector('.drag-ghost:not([hidden]) .ghost-count')?.textContent

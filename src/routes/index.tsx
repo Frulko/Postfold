@@ -5,7 +5,7 @@ import { deleteDraftFiles } from '../lib/draft-attachments'
 import { useI18n } from '../lib/i18n'
 import { Suspense, lazy, useCallback, useEffect, useRef, useState, type CSSProperties, type DragEvent } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
-import { avatarColor, avatarColors, avatarSeed, compareMessages, filterConversations, formatMailTime, fullMailTime, highlightParts, includesContact, mailboxRows, suggestProjects, threadContacts, threadKey, updateSelection, type MailOrder } from '../lib/mailbox'
+import { avatarColor, avatarColors, avatarSeed, compareMessages, distinctMails, filterConversations, formatMailTime, fullMailTime, highlightParts, includesContact, mailboxRows, suggestProjects, threadContacts, threadKey, updateSelection, type MailOrder } from '../lib/mailbox'
 import { getDemoMailbox, listMailbox, searchContacts, saveProjectSettings, savePreferences, updateConversationState, syncMailbox, sendReply, reportPresence } from '../server/demo'
 import { Icon } from '../components/icon'
 import { ProjectPicker } from '../components/project-picker'
@@ -86,8 +86,10 @@ function MailboxPage() {
   const loadedRef = useRef(0)
   // A window fetched for filters that changed meanwhile is dropped instead of replacing the newer one.
   const isCurrent = (key: string) => !windowed || JSON.stringify(listQueryRef.current) === key
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null)
   const acceptMailbox = useCallback((freshMailbox: DemoMailbox, append = false) => {
     rememberDeadline(offlineDeadline(freshMailbox.viewer?.sessionExpiresAt))
+    setUpdatedAt(Date.now())
     const states = mergeConversationStates(latestStates.current, freshMailbox.conversationStates)
     latestStates.current = states
     setBaseMailbox((current) => {
@@ -294,6 +296,8 @@ function MailboxPage() {
       (!memberId || windowed || item.assigneeId === memberId))
   const conversations = filtered(mailbox)
   const displayMode = local.displayMode ?? 'messages'
+  // ponytail: delete = move to the server's Trash, like a mail client; emptying the Trash stays in the mail client.
+  const trashId = mailbox.connection?.trashId ?? null
   const listOrder = local.listOrder ?? 'newest'
   const conversationOrder = local.conversationOrder ?? 'oldest'
   // The contact panel starts closed; opening it is remembered like the other display preferences.
@@ -316,7 +320,7 @@ function MailboxPage() {
   const project = mailbox.projects.find((item) => item.id === conversation.projectId) ?? mailbox.projects[0]
   const selectedProject = mailbox.projects.find((item) => item.id === projectId)
   // The reader shows the whole thread like a mail client; in All messages, actions still apply to the opened mail only.
-  const fullThread = mailbox.conversations.filter((item) => threadKey(item) === threadKey(conversation)).sort((a, b) => compareMessages(a, b, conversationOrder))
+  const fullThread = distinctMails(mailbox.conversations.filter((item) => threadKey(item) === threadKey(conversation)), selectedId).sort((a, b) => compareMessages(a, b, conversationOrder))
   const threadMessages = displayMode === 'threads' ? fullThread : [conversation]
   const participants = threadContacts(mailbox, threadMessages)
   // People of the open thread get colours apart from each other.
@@ -804,7 +808,8 @@ function MailboxPage() {
           <div className="breadcrumb"><span>{t("Support")}</span><Icon name="chevron" /><strong>{view === 'settings' ? t('Gestion de la boîte') : view === 'compose' ? t('Nouveau mail') : view === 'contacts' ? t("Contacts") : selectedProject?.name ?? t("Tous les échanges")}</strong></div>
           <div className="header-indicators">
             <select className="language-switch" aria-label={t("Langue")} value={locale} onChange={(event) => { setConversationFeedback(''); setFolderFeedback(''); setNotice(''); void navigate({ search: (prev) => ({ ...prev, lang: event.target.value === 'en' ? 'en' : 'fr' }), replace: true }) }}><option value="fr">FR</option><option value="en">EN</option></select>
-            <MailboxRefresh onRefresh={refreshMailbox} connected={!!mailbox.connection} online={online} automatic={local.autoRefresh ?? true} onAutomaticChange={(autoRefresh) => save({ ...localRef.current, autoRefresh })} />
+            <MailboxRefresh onRefresh={refreshMailbox} connected={!!mailbox.connection} online={online} updatedAt={updatedAt} syncFailed={!!mailbox.connection?.error}
+              message={conversationFeedback ? { text: conversationFeedback, failed: conversationFailed } : null} onDismiss={() => setConversationFeedback('')} />
             {mailbox.viewer ? <><span className="identity-badge" title={mailbox.viewer.email}><span className="user-avatar" style={avatarColor(avatarSeed(mailbox.viewer))}>{initials(mailbox.viewer.name)}</span><span>{mailbox.viewer.name}</span></span><form action="/auth/logout" method="post" onSubmit={(event) => { if (!preserveDraft()) event.preventDefault(); else forgetOfflineCopy(true) }}><button className="secondary-button" type="submit">{t("Se déconnecter")}</button></form></> : null}
             {!mailbox.connection && !mailbox.viewer ? <div className="presence-group">
               <ul className="presence-list" aria-label={t("Présences de démonstration")}>
@@ -836,13 +841,11 @@ function MailboxPage() {
             <span className="demo-badge">{t(mailbox.connection ? "IMAP / SMTP" : "Démonstration")}</span>
           </div>
         </header>
-        <div className="demo-banner"><Icon name="info" /><span>{t(mailbox.connection ? "Boîte IMAP connectée · réponses SMTP protégées contre les doublons. Notes et brouillons restent dans ce navigateur." : "Dossiers, classement, labels et suivi partagés avec l’équipe. Aucune boîte mail connectée ; notes et brouillons restent locaux dans cette démo.")}{mailbox.connection?.error ? ` ${t("La dernière relève a échoué ; les mails en cache sont conservés.")}` : ''}</span></div>
         {!online || outbox.length ? <p className={`offline-banner ${online ? 'sending' : ''}`} role="status">{online
           ? t("Envoi de {0} modification{1} faite{1} hors ligne…", outbox.length, outbox.length > 1 ? 's' : '')
           : t("Hors ligne. Lu, statut, dossier, labels et attribution restent modifiables ({0} en attente, envoyé{1} au retour du réseau). Réponses, gestion des dossiers et relève reprendront en ligne.", outbox.length, outbox.length > 1 ? 's' : '')}</p> : null}
-        {mailbox.connection ? <SyncProgressBanner onCycle={() => { void refreshMailbox(false).catch(() => {}) }} /> : null}
+        {mailbox.connection ? <SyncProgressBanner onChange={() => { void refreshMailbox(false).catch(() => {}) }} /> : null}
         {error ? <div role="alert" className="error-banner">{error}</div> : null}
-        {conversationFeedback ? <div role={conversationFailed ? 'alert' : 'status'} className={`conversation-feedback ${conversationFailed ? 'failed' : ''}`}>{conversationFeedback}</div> : null}
         {view === 'compose' ? <Suspense fallback={<p>{t('Chargement…')}</p>}><NewMail key={newMailTo ?? ''} contacts={mailbox.contacts} windowed={windowed} storageKey={storageKey} connected={!!mailbox.connection} online={online} initialTo={newMailTo} onClose={() => setView('mail')} onSent={newMailSent} /></Suspense> :
         view === 'settings' ? <Suspense fallback={<p>{t('Chargement…')}</p>}><AuthoringPage projects={mailbox.projects} connected={!!mailbox.connection} tab={settingsTab} onTab={setSettingsTab} onUpdated={() => { void refreshMailbox(false) }} /></Suspense> : <div className="content-grid" data-contact-collapsed={contactCollapsed}>
           <section className="conversation-list" aria-label={view === 'contacts' ? t("Liste des contacts") : t("Liste des conversations")} onKeyDown={(event) => {
@@ -899,7 +902,7 @@ function MailboxPage() {
                     window.addEventListener('resize', update)
                     update()
                     return () => { observer.disconnect(); window.removeEventListener('resize', update) }
-                  }}><ConversationActions disabled={stateBusy} onChange={(patch) => changeConversations(chosenMessages, patch)} /><ProjectPicker projects={sortProjects(mailbox.projects, folderSort, folderOrder)} disabled={stateBusy || !storageReady} onSelect={(targetId) => move(chosen, targetId)} /><LabelPicker labels={mailbox.labels ?? []} conversations={mailbox.conversations.filter((item) => chosenMessages.includes(item.id))} disabled={stateBusy} onChange={(patch) => changeConversations(chosenMessages, patch)} /><AssignmentPicker members={mailbox.members ?? []} currentId={mailbox.currentMemberId} conversations={mailbox.conversations.filter((item) => chosenMessages.includes(item.id))} disabled={stateBusy} onChange={(patch) => changeConversations(chosenMessages, patch)} /><small>{t("Maj : sélectionner une plage · Ctrl / ⌘ : ajouter")}</small></div> : null}
+                  }}><ConversationActions disabled={stateBusy} onChange={(patch) => changeConversations(chosenMessages, patch)} /><ProjectPicker projects={sortProjects(mailbox.projects, folderSort, folderOrder)} disabled={stateBusy || !storageReady} onSelect={(targetId) => move(chosen, targetId)} />{trashId ? <button type="button" className="secondary-button delete-action" disabled={stateBusy || !storageReady} title={t("Mettre à la corbeille du serveur mail")} onClick={() => void move(chosen, trashId)}><Icon name="trash" />{t("Supprimer")}</button> : null}<LabelPicker labels={mailbox.labels ?? []} conversations={mailbox.conversations.filter((item) => chosenMessages.includes(item.id))} disabled={stateBusy} onChange={(patch) => changeConversations(chosenMessages, patch)} /><AssignmentPicker members={mailbox.members ?? []} currentId={mailbox.currentMemberId} conversations={mailbox.conversations.filter((item) => chosenMessages.includes(item.id))} disabled={stateBusy} onChange={(patch) => changeConversations(chosenMessages, patch)} /><small>{t("Maj : sélectionner une plage · Ctrl / ⌘ : ajouter")}</small></div> : null}
                 </> : null}
               </div>
             </> : null}
@@ -932,7 +935,7 @@ function MailboxPage() {
           <section className="reading-pane" ref={readingPane} tabIndex={0} aria-label={view === 'mail' ? t("Conversation sélectionnée") : t("Historique du contact")}>
             {view === 'mail' ? showConversation ? <>
               <header className="reading-context"><div><strong title={displayMode === 'threads' ? threadSubject : conversation.subject}>{displayMode === 'threads' ? threadSubject : conversation.subject}</strong><small title={participants.map(person => person.name).join(', ')}>{projectPath(mailbox.projects, project.id)} · {participants.map(person => person.name).join(', ') || replyContact.name}</small></div><span className={`status ${conversation.status}`}>{t(statuses[conversation.status])}</span><button className="icon-button" title={t('Préparer une réponse')} aria-label={t('Préparer une réponse')} onClick={() => beginReply()} disabled={conversation.outgoing || replyLocked}><Icon name="reply" /></button><button className="icon-button contact-toggle" aria-controls="contact-profile" aria-expanded={!contactCollapsed} aria-label={t(contactCollapsed ? 'Afficher la fiche contact' : 'Masquer la fiche contact')} title={t(contactCollapsed ? 'Afficher la fiche contact' : 'Masquer la fiche contact')} disabled={!storageReady} onClick={toggleContact}><Icon name="users" /></button></header>
-              <div className="reading-toolbar"><ConversationActions unread={threadMessages.some((item) => item.unread)} status={conversation.status} disabled={stateBusy} onChange={(patch) => changeConversations(readingIds, patch)} /><LabelPicker labels={mailbox.labels ?? []} conversations={threadMessages} disabled={stateBusy} onChange={(patch) => changeConversations(readingIds, patch)} /><AssignmentPicker members={mailbox.members ?? []} currentId={mailbox.currentMemberId} conversations={threadMessages} disabled={stateBusy} onChange={(patch) => changeConversations(readingIds, patch)} /></div>
+              <div className="reading-toolbar"><ConversationActions unread={threadMessages.some((item) => item.unread)} status={conversation.status} disabled={stateBusy} onChange={(patch) => changeConversations(readingIds, patch)} /><LabelPicker labels={mailbox.labels ?? []} conversations={threadMessages} disabled={stateBusy} onChange={(patch) => changeConversations(readingIds, patch)} /><AssignmentPicker members={mailbox.members ?? []} currentId={mailbox.currentMemberId} conversations={threadMessages} disabled={stateBusy} onChange={(patch) => changeConversations(readingIds, patch)} />{trashId && conversation.projectId !== trashId ? <button type="button" className="secondary-button delete-action" disabled={stateBusy || !storageReady} title={t("Mettre à la corbeille du serveur mail")} onClick={() => void move(readingIds, trashId)}><Icon name="trash" />{t("Supprimer")}</button> : null}</div>
               <div className="message-heading"><span className="eyebrow">{projectPath(mailbox.projects, project.id)}</span><div className="message-subject"><h2 title={displayMode === 'threads' ? threadSubject : conversation.subject}>{displayMode === 'threads' ? threadSubject : conversation.subject}</h2>
                 {filingSuggestions.length ? <div className="filing-suggestions" role="group" aria-label={t('Classement proposé')}>
                   {filingSuggestions.map((target) => {

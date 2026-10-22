@@ -294,6 +294,32 @@ try {
   assert.deepEqual([newSent[0].id, newSent[0].outgoing, newSent[0].imapReady, newSent[0].status], [`sent_${newMail.requestId}`, true, true, 'waiting'])
   assert.deepEqual(newSent[0].participants.map(person => person.email), newMail.to)
   console.info('New mail from scratch: validation, delivery to every recipient, idempotency and Sent synchronization: passed')
+  const admin = { ...supportActor, admin: true }
+  await store.updateAuthoring({ revision: (await store.authoring(admin)).revision, action: 'signature', item: { id: 'alice-signature', name: 'Alice · Support', html: '<p>Alice</p>' } }, admin)
+  const signedMail = { to: ['customer@postfold.test'], subject: 'Signed sender', text: 'Signed.', signatureId: 'alice-signature', requestId: randomUUID() }
+  await store.compose(signedMail, supportActor)
+  const signedClient = new ImapFlow({ host: 'localhost', port: imapPort, secure: true, auth: { user: 'support', pass: 'test-only-mail-password' }, tls, logger: false })
+  signedClient.on('error', () => {})
+  try {
+    await signedClient.connect(); const lock = await signedClient.getMailboxLock('Sent')
+    try {
+      const copy = (await signedClient.fetchAll('1:*', { envelope: true, source: true })).find(item => item.envelope.subject === signedMail.subject)
+      assert.equal(copy.envelope.from[0].name, 'Alice · Support', 'The From name must be the chosen signature name')
+      // A server that also files submitted mail in Sent leaves two copies with one Message-ID.
+      await signedClient.append('Sent', copy.source, ['\\Seen'])
+    } finally { lock.release() }
+    await signedClient.mailboxCreate('Trash')
+  } finally { await signedClient.logout().catch(() => signedClient.close()) }
+  mailbox = await store.sync()
+  const signedCopies = (await store.mailbox({ query: 'Signed sender' })).conversations.filter(item => item.subject === signedMail.subject)
+  assert.equal(signedCopies.length, 2)
+  assert.deepEqual(signedCopies.map(item => item.threadSize), [1, 1], 'Copies of one mail must count once in their thread')
+  const trash = mailbox.projects.find(item => item.name === 'Trash')
+  assert.equal(mailbox.connection.trashId, trash.id, 'The Trash folder must be recognised for deletion')
+  const signedState = mailbox.conversationStates.find(item => item.id === `sent_${signedMail.requestId}`)
+  await store.updateConversations({ targets: [{ id: signedState.id, revision: signedState.revision }], projectId: trash.id }, supportActor)
+  assert.equal((await pool.query('SELECT path FROM mail_messages WHERE mailbox_id=$1 AND id=$2', [`imap:${accountId}`, signedState.id])).rows[0].path, 'Trash')
+  console.info('Signature sender name, duplicate Sent copies counted once and deletion to Trash: passed')
   const recoveryClient = new ImapFlow({ host: 'localhost', port: imapPort, secure: true, auth: { user: 'support', pass: 'test-only-mail-password' }, tls, logger: false })
   recoveryClient.on('error', () => {})
   const archiveMessageId = `<${randomUUID()}@postfold.test>`

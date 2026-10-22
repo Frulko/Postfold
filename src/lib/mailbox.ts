@@ -80,6 +80,12 @@ export function moveConversations(mailbox: Mailbox, ids: string[], projectId: st
 }
 
 export const threadKey = (message: Conversation) => message.threadId ?? message.id
+// One mail stored twice (same Message-ID, e.g. a Sent copy saved by both the mail server and Postfold) shows once; `keep` wins.
+export function distinctMails(messages: Conversation[], keep?: string) {
+  const mails = new Map<string, Conversation>()
+  for (const message of messages) if (!mails.has(message.messageId ?? message.id) || message.id === keep) mails.set(message.messageId ?? message.id, message)
+  return [...mails.values()]
+}
 export const includesContact = (message: Conversation, contact: Contact) => message.contactId === contact.id ||
   message.participants?.some(person => person.email.toLowerCase() === contact.email.toLowerCase()) === true
 export type MailOrder = 'newest' | 'oldest'
@@ -95,7 +101,7 @@ export function threadContacts(mailbox: Mailbox, messages: Conversation[]) {
 // `relevance` keeps the API's ranking: rows follow the order of their best message.
 export function mailboxRows(messages: Conversation[], mode: 'messages' | 'threads', order: MailOrder | 'relevance' = 'newest') {
   const groups = new Map<string, Conversation[]>()
-  for (const message of messages) {
+  for (const message of distinctMails(messages)) {
     const key = mode === 'threads' ? threadKey(message) : message.id
     const group = groups.get(key) ?? []
     group.push(message)

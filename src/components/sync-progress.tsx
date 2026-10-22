@@ -3,12 +3,13 @@ import { getSyncProgress } from '../server/demo'
 import type { SyncProgress } from '../../shared/mailbox'
 import { useI18n } from '../lib/i18n'
 
-// Polls the background synchronization: fast while a cycle runs, slowly otherwise. A finished cycle refreshes the list.
-export function SyncProgressBanner({ onCycle }: { onCycle: () => void }) {
+// Polls the background synchronization every 2 s while a cycle runs, 3 s otherwise; the list reloads when the server
+// reports a change (new mail, or a colleague's change), not after every cycle.
+export function SyncProgressBanner({ onChange }: { onChange: () => void }) {
   const { t, locale } = useI18n()
   const [progress, setProgress] = useState<SyncProgress | null>(null)
-  const cycle = useRef(onCycle)
-  cycle.current = onCycle
+  const changed = useRef(onChange)
+  changed.current = onChange
   useEffect(() => {
     let active = true
     let timer: ReturnType<typeof setTimeout>
@@ -19,11 +20,10 @@ export function SyncProgressBanner({ onCycle }: { onCycle: () => void }) {
       if (!active) return
       if (next) {
         setProgress(next)
-        const finished = next.lastCycle?.finishedAt ?? null
-        if (seen !== undefined && finished !== seen) cycle.current()
-        seen = finished
+        if (seen !== undefined && next.changedAt !== seen) changed.current()
+        seen = next.changedAt
       }
-      timer = setTimeout(poll, next && next.state !== 'idle' ? 2000 : 10_000)
+      timer = setTimeout(poll, next && next.state !== 'idle' ? 2000 : 3000)
     }
     void poll()
     return () => { active = false; clearTimeout(timer) }

@@ -16,7 +16,6 @@ try {
   browser('open', `${webOrigin}/?lang=en`)
   browser('set', 'viewport', '1440', '900')
   browser('wait', '.thread-row[draggable="true"]')
-  browser('uncheck', '.auto-refresh input')
   assert.equal(evaluate('document.querySelector(".reading-pane h2").textContent'), 'No mail open', 'Arriving must not open (and mark read) a mail')
   browser('select', '[aria-label="Display mode"]', 'threads')
   click('[data-conversation-id="plans"] .thread-open')

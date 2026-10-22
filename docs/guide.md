@@ -21,7 +21,7 @@ Postfold brings project folders, conversation tracking and contact context into 
 | Labels | Shared creation, renaming, colors, ordering, deletion, search, filtering and single/batch assignment. Deleting a label removes it from every conversation in one transaction. |
 | Contacts | Contact details, associated projects, conversation history and browser-local notes. |
 | Drafts | Save and Send controls together; local draft persistence and save on conversation change. Send stays disabled until a mailbox is connected. |
-| Refresh | Manual refresh and automatic refresh every 30 seconds while visible and online. Live mode synchronizes IMAP; demo mode refreshes fictional API data. |
+| Refresh | Live mailboxes update by themselves: the server watches INBOX with IMAP IDLE and checks every folder every 30 seconds, and each browser reloads its list within seconds of a change. The header shows a refresh button and a status pill; a click on the pill shows the connection details, the last error or conflict, and **Synchronize now**. Demo mode refreshes fictional API data. |
 | Interface | Responsive layout, keyboard controls and a compact folder tree, French/English controls and a header listing colleagues online and what each one reads, refreshed every 3 seconds (simulated in the demo; needs Keycloak sign-in). |
 
 ### Batch actions without moving the list
@@ -55,7 +55,7 @@ In manual sort mode, drag a grip above or below a sibling to reorder it. Drop in
 
 ### Messages or conversation threads
 
-Choose **All messages** to list each email separately, with direct reply controls; opening one also shows the earlier mails of its thread, collapsed. The address bar follows the open folder and mail: a refresh reopens them, and Back and Forward move between them. Choose **Conversations** to group messages by explicit thread ID, show the latest preview and activity, and expand individual messages in the reader. Matching subjects alone never merge unrelated messages.
+Choose **All messages** to list each email separately, with direct reply controls; opening one also shows the earlier mails of its thread, collapsed. The address bar follows the open folder and mail: a refresh reopens them, and Back and Forward move between them. Choose **Conversations** to group messages by explicit thread ID, show the latest preview and activity, and expand individual messages in the reader. Matching subjects alone never merge unrelated messages. Two copies of one mail (same Message-ID, for example a Sent copy saved by both the mail server and Postfold) show once. **Delete** moves the open mail, or the selection, to the mail server’s Trash folder; it appears only when the server has one, and emptying the Trash is left to the mail client.
 
 Display mode and list/thread ordering are saved independently in this browser. The list defaults to newest activity first. Threads default to oldest first and open at the latest message, like a messaging conversation; either order can be changed. Existing saved choices are kept.
 
@@ -85,7 +85,7 @@ Keep contact details, related projects and conversation history together. Multi-
 
 ### Draft composer
 
-Write rich replies with formatting, lists, links, tables, template insertion and an assigned signature. Expand the editor for a dedicated writing viewport with fixed controls, including on mobile. Show or collapse the signature preview and inspect the complete HTML before sending. Switching modes preserves editor history. Attach files by selection, drag-and-drop or clipboard paste; attachments survive reloads in IndexedDB. Text and formatting are autosaved locally, with Save draft and Send available together. Send remains disabled in the fictional demo. [Writing and team management](authoring.md) covers permissions and limits.
+Write rich replies with formatting, lists, links, tables, template insertion and an assigned signature. The signature’s name is the sender name of the mail (`Name <support@…>`); without a signature, the mailbox name is used. Expand the editor for a dedicated writing viewport with fixed controls, including on mobile. Show or collapse the signature preview and inspect the complete HTML before sending. Switching modes preserves editor history. Attach files by selection, drag-and-drop or clipboard paste; attachments survive reloads in IndexedDB. Text and formatting are autosaved locally, with Save draft and Send available together. Send remains disabled in the fictional demo. [Writing and team management](authoring.md) covers permissions and limits.
 
 ![Compact draft composer with formatting, signature preview, attachments and Save draft/Send controls](screenshots/draft-composer.png)
 
@@ -182,7 +182,7 @@ Opening a conversation marks it read, including the initially displayed conversa
 
 Shared state updates check a revision per conversation. A conflicting batch is rejected as a whole, displays current shared states and can be reviewed before retrying. Older refresh responses cannot replace a newer acknowledged revision. Folder settings use a revision for the whole settings document; conflicts keep the entered values available for review.
 
-Other browsers receive shared changes on manual refresh or the next automatic refresh, **not** through WebSockets. Refresh preserves drafts and selection unless the selected conversations stop matching the active filters.
+Other browsers receive shared changes within a few seconds: they poll a change marker every 3 seconds and reload their list when it moves, **not** through WebSockets. Refresh preserves drafts and selection unless the selected conversations stop matching the active filters.
 
 | Interaction | Behavior |
 | --- | --- |

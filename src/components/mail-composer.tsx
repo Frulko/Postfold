@@ -7,7 +7,7 @@ import { RichEditor, EmailPreview } from './rich-editor'
 import { Icon } from './icon'
 import { useI18n } from '../lib/i18n'
 
-export type ComposedMail = { text: string; html: string; attachments: MailAttachment[] }
+export type ComposedMail = { text: string; html: string; attachments: MailAttachment[]; signatureId?: string }
 export function MailComposer({ title, draft, onChange, recipient, subject, storageKey, busy, sendDisabled, sendHint, feedback, saved, onSave, onSend, onFilesBusy, onReady }: {
   title?: string; draft: RichDraft; onChange: Dispatch<SetStateAction<RichDraft>>; recipient: { name: string; email: string }; subject: string; storageKey: string; busy: boolean; sendDisabled: boolean; sendHint: string; feedback: string; saved: boolean; onSave(): void; onSend(mail: ComposedMail): void; onFilesBusy(busy: boolean): void; onReady(element: HTMLElement): void;
 }) {
@@ -28,7 +28,7 @@ export function MailComposer({ title, draft, onChange, recipient, subject, stora
   const filesWrite = useRef(false)
   const currentDraft = useRef(draft)
   currentDraft.current = draft
-  const body = () => ({ text: `${draft.text.trim()}${draft.signatureText ? `\n\n${draft.signatureText}` : ''}`, html: `<div style="font-family:Arial;font-size:14px;line-height:1.5">${draft.html}${draft.signatureHtml ? `<br>${draft.signatureHtml}` : ''}</div>`, attachments })
+  const body = () => ({ text: `${draft.text.trim()}${draft.signatureText ? `\n\n${draft.signatureText}` : ''}`, html: `<div style="font-family:Arial;font-size:14px;line-height:1.5">${draft.html}${draft.signatureHtml ? `<br>${draft.signatureHtml}` : ''}</div>`, attachments, ...(draft.signatureId ? { signatureId: draft.signatureId } : {}) })
   useEffect(() => {
     let active = true
     void Promise.all([getAuthoring(), loadDraftFiles(storageKey)]).then(([config, files]) => {

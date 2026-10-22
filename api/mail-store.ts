@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
 import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { ImapFlow, type FetchMessageObject, type ListResponse } from 'imapflow'
+import { ImapFlow, type FetchMessageObject, type ImapFlowOptions, type ListResponse } from 'imapflow'
 import nodemailer from 'nodemailer'
 import { simpleParser } from 'mailparser'
 import { cleanEmailHtml, cleanIncomingHtml } from './email-html.js'
@@ -28,7 +28,7 @@ const LISTING_REUSE_MS = 5 * 60_000 // Folder listing reuse while an import cont
 const INVENTORY_MAX_AGE_MS = 60 * 60_000 // Unchanged folders are still rescanned hourly, for servers without CONDSTORE.
 const folderStatus = { messages: true, uidNext: true, uidValidity: true, unseen: true, highestModseq: true }
 const cycleStarts = { scheduled: 'Synchronization started', manual: 'Synchronization started on request', resume: 'Synchronization resumed to continue the import',
-  startup: 'Synchronization started after startup', settings: 'Synchronization started after a settings change' }
+  startup: 'Synchronization started after startup', settings: 'Synchronization started after a settings change', idle: 'Synchronization started for new mail in INBOX' }
 const LIST_PAGE = 200 // Messages per list window.
 const MAX_SEARCH_TERMS = 12 // Words and operators per search, to bound query cost.
 const SEARCH_TIMEOUT_MS = 8000
@@ -83,6 +83,8 @@ export class MailStore extends ProjectStore {
   private lastSync: string | null = null
   private syncError = false
   private delimiter = '/'
+  // The server's Trash folder (special-use flag, or its usual name); deleting a mail moves it there.
+  private trashId: string | null = null
   private readonly limit = Math.max(1, Math.min(5000, Number(process.env.MAILBOX_SYNC_LIMIT) || 200))
   // ponytail: in-memory ring buffer, lost on restart; the stdout copy keeps the history in container logs.
   private logs: MailLogEntry[] = []
@@ -93,7 +95,10 @@ export class MailStore extends ProjectStore {
   private syncing = false
   private fuzzy = false
   private waiting = 0
-  private progress: SyncProgress = { state: 'idle', startedAt: null, folder: null, folders: { done: 0, total: 0 }, batch: { done: 0, total: 0 }, stored: 0, total: 0, rate: null, lastCycle: null, error: null }
+  private again = false
+  private stopped = false
+  private watcher?: ImapFlow
+  private progress: SyncProgress = { state: 'idle', startedAt: null, folder: null, folders: { done: 0, total: 0 }, batch: { done: 0, total: 0 }, stored: 0, total: 0, rate: null, lastCycle: null, error: null, changedAt: null }
 
   constructor(private accountId = process.env.MAILBOX_ID ?? 'support') {
     super(`imap:${accountId}`, emptyMailbox)
@@ -263,18 +268,39 @@ export class MailStore extends ProjectStore {
     this.timer = setInterval(() => this.requestSync('scheduled'), 30_000)
     this.timer.unref()
     this.requestSync('startup')
+    void this.watchInbox()
   }
+
+  // IMAP IDLE on INBOX: the server announces new mail at once, so a cycle starts within seconds instead of at the next tick.
+  // ponytail: INBOX only; other folders and flags changed in other clients still arrive with the 30 s cycle.
+  private async watchInbox() {
+    while (!this.stopped) {
+      const client = this.imap(this.account, { disableAutoIdle: false, maxIdleTime: 5 * 60_000, socketTimeout: 6 * 60_000 })
+      this.watcher = client
+      try {
+        await client.connect()
+        await client.mailboxOpen('INBOX', { readOnly: true })
+        client.on('exists', () => this.requestSync('idle'))
+        await new Promise((resolve) => client.once('close', resolve))
+      } catch (error) { this.log('warn', 'INBOX watch interrupted: {0}', describeError(error)) }
+      finally { client.close() }
+      if (!this.stopped) await new Promise((resolve) => setTimeout(resolve, 30_000).unref())
+    }
+  }
+
+  // Browsers poll the sync progress and reload their list when this moves: new mail, or a change made in Postfold.
+  private touch() { this.progress.changedAt = new Date().toISOString() }
 
   private tls() {
     return { rejectUnauthorized: true, minVersion: 'TLSv1.2' as const, ...(process.env.MAILBOX_CA_FILE ? { ca: readFileSync(process.env.MAILBOX_CA_FILE) } : {}) }
   }
 
-  private imap(account = this.account) {
+  private imap(account = this.account, options: Partial<ImapFlowOptions> = {}) {
     const endpoint = account.imap
     const client = new ImapFlow({ host: endpoint.host, port: endpoint.port, secure: endpoint.security === 'tls',
       ...(endpoint.security === 'starttls' ? { doSTARTTLS: true } : {}),
       auth: { user: endpoint.user, pass: endpoint.password }, tls: this.tls(), logger: false,
-      connectionTimeout: 15_000, greetingTimeout: 15_000, socketTimeout: 30_000, disableAutoIdle: true })
+      connectionTimeout: 15_000, greetingTimeout: 15_000, socketTimeout: 30_000, disableAutoIdle: true, ...options })
     // Protocol errors must not become unhandled events or expose credentials in logs.
     client.on('error', () => {})
     return client
@@ -346,6 +372,7 @@ export class MailStore extends ProjectStore {
       this.progress = { ...this.progress, stored: 0, total: 0, rate: null, lastCycle: null, error: null }
       this.log('warn', 'Local data cleared; resynchronizing {0} from scratch', next.email)
     }, 150_000)
+    this.watcher?.close()
     this.requestSync('settings')
     return this.accountSettings(actor)
   }
@@ -393,7 +420,7 @@ export class MailStore extends ProjectStore {
     const { projects, ...projectSettings } = settings
     return { projects, projectSettings, labels: settings.labels ?? [], conversations, contacts: contactsOf(conversations), conversationStates,
       page: { total: page.total, nextCursor: page.nextCursor, corrections: page.corrections }, counts: { ...counts, messages: counts.messages + pending.length, threads: counts.threads + pending.length },
-      connection: { mode: 'imap', email: this.account.email, lastSync: this.lastSync, error: this.syncError, maxMessagesPerSync: this.limit },
+      connection: { mode: 'imap', email: this.account.email, lastSync: this.lastSync, error: this.syncError, maxMessagesPerSync: this.limit, trashId: this.trashId },
       deliveries: sends.rows.map((row) => ({ targetId: row.target_id, status: row.status, sentCopy: row.sent_copy })) }
   }
 
@@ -453,7 +480,8 @@ export class MailStore extends ProjectStore {
     const excerpt = `CASE WHEN ${longest} <> '' AND m.body IS NOT NULL AND strpos(postfold_fold(m.body), ${longest}) > 0
       THEN substr(m.body, GREATEST(1, strpos(postfold_fold(m.body), ${longest}) - 60), 240) END`
     // Each listed mail tells how many mails its thread holds, every folder included.
-    const threadSize = "(SELECT count(*)::integer FROM mail_messages t WHERE t.mailbox_id = m.mailbox_id AND t.data->>'threadId' = m.data->>'threadId')"
+    // Copies of one mail (same Message-ID, e.g. a Sent copy saved by both the server and Postfold) count once.
+    const threadSize = "(SELECT count(DISTINCT COALESCE(t.raw_id, t.id))::integer FROM mail_messages t WHERE t.mailbox_id = m.mailbox_id AND t.data->>'threadId' = m.data->>'threadId')"
     const page = order === 'relevance'
       ? `ORDER BY ${rank()} DESC, m.data->>'sentAt' DESC, m.id DESC OFFSET ${bind(cursor ?? 0)} LIMIT ${bind(limit + 1)}`
       : `${cursor ? `AND (m.data->>'sentAt', m.id) ${order === 'oldest' ? '>' : '<'} (${bind((cursor as string[])[0])}, ${bind((cursor as string[])[1])})` : ''}
@@ -619,8 +647,9 @@ export class MailStore extends ProjectStore {
   syncProgress(): SyncProgress { return { ...this.progress, folders: { ...this.progress.folders }, batch: { ...this.progress.batch } } }
 
   private async runCycle(reason: keyof typeof cycleStarts) {
-    // One cycle per process at a time; a user action waiting for the mailbox goes first.
-    if (this.syncing || this.waiting) return
+    // One cycle per process at a time; a user action waiting for the mailbox goes first. New mail announced meanwhile
+    // gets its own cycle right after.
+    if (this.syncing || this.waiting) { if (reason === 'idle') this.again = true; return }
     this.syncing = true
     let resume = false
     try {
@@ -638,6 +667,7 @@ export class MailStore extends ProjectStore {
           if (result.complete) await this.indexAttachments(started)
           if (result.imported) this.progress.rate = Math.round(result.imported / Math.max(seconds, 0.1) * 10) / 10
           this.progress.lastCycle = { finishedAt: this.lastSync, seconds, imported: result.imported, complete: result.complete }
+          if (result.changed) this.touch()
           this.log('info', result.complete ? 'Synchronization finished in {0} s: {1} new, {2} messages in {3} folders' : 'Synchronization step finished in {0} s: {1} new, {2} messages in {3} folders; import continues',
             seconds, result.imported, result.total, result.folders)
           const left = this.progress.total - this.progress.stored
@@ -656,6 +686,7 @@ export class MailStore extends ProjectStore {
       this.syncing = false
       // Large imports chain cycles instead of idling until the next scheduled tick.
       if (resume && this.timer) setTimeout(() => this.requestSync('resume'), 1000).unref()
+      else if (this.again) { this.again = false; setTimeout(() => this.requestSync('idle'), 1000).unref() }
     }
   }
 
@@ -694,6 +725,7 @@ export class MailStore extends ProjectStore {
       assignedIds.add(id.toLowerCase())
       return { folder, id }
     })
+    this.trashId = folders.find(({ folder }) => folder.specialUse === '\\Trash')?.id ?? null
     const projects: Project[] = folders.map(({ folder, id }) => {
       const previous = oldSettings.projects.find((item) => item.id === id)
       const parentPath = folder.path.slice(0, folder.path.lastIndexOf(this.delimiter))
@@ -948,7 +980,7 @@ export class MailStore extends ProjectStore {
       await transaction.query('COMMIT')
     } catch (error) { await transaction.query('ROLLBACK'); throw error } finally { transaction.release() }
     this.log('info', 'Saved in {0} s', secondsSince(saveStarted))
-    return { complete: !importPending, imported, total: inventory.length, folders: listed.length }
+    return { complete: !importPending, imported, total: inventory.length, folders: listed.length, changed: changed.length + removed.length }
   }
 
   override async updateConversations(input: unknown, actor?: Member) {
@@ -964,7 +996,9 @@ export class MailStore extends ProjectStore {
       if ([...(input.addLabelIds ?? []), ...(input.removeLabelIds ?? [])].some((id) => !settings.labels?.some((label) => label.id === id))) throw new BadRequestException('Unknown label.')
       if (input.projectId && !settings.projects.some((item) => item.id === input.projectId)) throw new BadRequestException('Unknown destination folder.')
       if (input.unread !== undefined || input.projectId !== undefined) await this.applyImapUpdate(input).catch((error) => { this.log('warn', 'IMAP update failed: {0}', describeError(error)); throw error })
-      return super.updateConversations(input, actor)
+      const updated = await super.updateConversations(input, actor)
+      this.touch()
+      return updated
     }, 60_000) // Opening or filing a mail makes the running sync pause at its next checkpoint instead of failing.
   }
 
@@ -1063,7 +1097,9 @@ export class MailStore extends ProjectStore {
           }
         } finally { await client.logout().catch(() => client.close()) }
       }
-      return super.update(input)
+      const settings = await super.update(input)
+      this.touch()
+      return settings
     }, 60_000)
   }
 
@@ -1132,16 +1168,19 @@ export class MailStore extends ProjectStore {
 
   // SMTP delivery shared by replies and new mails: the send is reserved before SMTP so it is never sent twice, then archived
   // with its conversation state and copied to Sent. Returns whether the Sent copy is confirmed.
-  private async deliver(kind: 'Reply' | 'Mail', input: { text: string; attachments?: MailAttachment[]; requestId: string }, html: string | undefined, draft: CachedMessage['data'], to: string[],
+  private async deliver(kind: 'Reply' | 'Mail', input: { text: string; attachments?: MailAttachment[]; signatureId?: string; requestId: string }, html: string | undefined, draft: CachedMessage['data'], to: string[],
     send: { targetId: string; replyKey: string; digest: string; actor?: Member; inReplyTo?: string; references: string[]; assigneeId: string | null }) {
     const transport = this.smtp()
     await transport.verify()
     const messageId = `<${input.requestId}@${this.account.email.split('@')[1]}>`
     const date = new Date()
+    const { rows: signature } = input.signatureId ? await this.pool.query<{ name: string }>(`SELECT s->>'name' AS name FROM postfold_authoring, jsonb_array_elements(settings->'signatures') s
+      WHERE mailbox_id=$1 AND s->>'id'=$2`, [this.mailboxId, input.signatureId]) : { rows: [] }
+    const name = signature[0]?.name || this.account.name
     // Same thread key as the import of the Sent copy, so the synchronized copy stays in this thread.
-    const outgoing: CachedMessage['data'] = { ...draft, messageId, sentAt: date.toISOString(), time: date.toISOString().slice(0, 10), threadId: draft.threadId || hash(messageId) }
+    const outgoing: CachedMessage['data'] = { ...draft, sender: { name: name || this.account.email, email: this.account.email }, messageId, sentAt: date.toISOString(), time: date.toISOString().slice(0, 10), threadId: draft.threadId || hash(messageId) }
     const generated = await nodemailer.createTransport({ streamTransport: true, buffer: true }).sendMail({
-      from: { name: this.account.name, address: this.account.email }, to, subject: outgoing.subject, text: input.text, html, attachments: input.attachments?.map(a => ({ filename: a.filename, contentType: a.contentType, content: Buffer.from(a.content, 'base64') })), date, messageId,
+      from: { name, address: this.account.email }, to, subject: outgoing.subject, text: input.text, html, attachments: input.attachments?.map(a => ({ filename: a.filename, contentType: a.contentType, content: Buffer.from(a.content, 'base64') })), date, messageId,
       inReplyTo: send.inReplyTo, references: send.references,
       disableFileAccess: true, disableUrlAccess: true,
     })
@@ -1177,8 +1216,9 @@ export class MailStore extends ProjectStore {
       finally { await client.logout().catch(() => client.close()) }
     }
     await this.pool.query('UPDATE mail_sends SET sent_copy=$3 WHERE mailbox_id=$1 AND request_id=$2', [this.mailboxId, input.requestId, sentCopy])
+    this.touch()
     return sentCopy
   }
 
-  override async onApplicationShutdown() { clearInterval(this.timer); await super.onApplicationShutdown() }
+  override async onApplicationShutdown() { this.stopped = true; clearInterval(this.timer); this.watcher?.close(); await super.onApplicationShutdown() }
 }

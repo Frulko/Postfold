@@ -33,7 +33,7 @@ try {
   let ready = false
   for (let i = 0; i < 50; i++) { try { ready = (await fetch(origin + '/?lang=en')).ok; if (ready) break } catch {} await delay(200) }
   assert.ok(ready)
-  await browser('open', origin + '/?lang=en'); await browser('set', 'viewport', '1440', '1040'); await browser('wait', '.thread-row'); await browser('uncheck', '.auto-refresh input')
+  await browser('open', origin + '/?lang=en'); await browser('set', 'viewport', '1440', '1040'); await browser('wait', '.thread-row')
   const capture = async name => { if (process.env.AUTHORING_SCREENSHOTS) { mkdirSync(process.env.AUTHORING_SCREENSHOTS, { recursive: true }); await browser('screenshot', join(process.env.AUTHORING_SCREENSHOTS, name)) } }
   if (process.env.AUTHORING_SCREENSHOTS) {
     await capture('inbox-overview.png'); await capture('all-messages.png')
@@ -145,7 +145,7 @@ try {
   for (const [width,height] of [[1440,900],[768,1024],[390,844],[320,568],[667,375]]) {
     session = `postfold-authoring-${process.pid}-${width}x${height}`
     console.info(`Checking authoring viewport ${width}×${height}`)
-    await browser('open', origin + '/?lang=en'); await browser('set', 'viewport', String(width), String(height)); await browser('wait', '.thread-row'); await browser('uncheck', '.auto-refresh input'); assert.deepEqual(await evaluate('[innerWidth,innerHeight]'), [width,height]); assert.ok(await evaluate('document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight + 1'))
+    await browser('open', origin + '/?lang=en'); await browser('set', 'viewport', String(width), String(height)); await browser('wait', '.thread-row'); assert.deepEqual(await evaluate('[innerWidth,innerHeight]'), [width,height]); assert.ok(await evaluate('document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight + 1'))
     if (!await evaluate('!!document.querySelector("#reply")')) { await click('.reply-bar button'); await browser('wait', '#reply') }
     if (await evaluate('!!document.querySelector("#reply")')) {
       await browser('wait', '--fn', 'document.activeElement?.id === "reply"')
